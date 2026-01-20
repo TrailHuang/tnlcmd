@@ -1,4 +1,4 @@
-package session
+package tnlcmd
 
 import (
 	"bufio"
@@ -11,33 +11,40 @@ import (
 	"time"
 )
 
+// Session 会话结构
 type Session struct {
 	conn       net.Conn
+	config     *Config
+	commands   map[string]CommandInfo
 	mu         sync.RWMutex
 	lastActive time.Time
 	isClosed   bool
 	history    *CommandHistory
 	completer  *CommandCompleter
-	prompt     string
 }
 
-func NewSession(conn net.Conn) *Session {
+// NewSession 创建新的会话
+func NewSession(conn net.Conn, config *Config, commands map[string]CommandInfo) *Session {
 	s := &Session{
 		conn:       conn,
+		config:     config,
+		commands:   commands,
 		lastActive: time.Now(),
-		prompt:     "cmdline> ",
 	}
 
-	s.history = NewCommandHistory(100)
+	s.history = NewCommandHistory(config.MaxHistory)
 	s.completer = NewCommandCompleter()
+	s.completer.UpdateCommands(commands)
 
-	// 启用telnet字符模式，让按键立即发送
+	// 启用telnet字符模式
 	s.enableTelnetCharacterMode()
 
 	return s
 }
 
+// Handle 处理会话
 func (s *Session) Handle(ctx context.Context) error {
+	// 发送欢迎消息
 	s.sendWelcomeMessage()
 
 	for {
@@ -62,16 +69,18 @@ func (s *Session) Handle(ctx context.Context) error {
 			continue
 		}
 
-		if line == "exit" || line == "quit" {
-			s.writerWrite("Goodbye!\r\n")
+		s.history.Add(line)
+		err = s.processCommand(line)
+		if err == io.EOF {
 			return nil
 		}
-
-		s.history.Add(line)
-		s.processCommand(line)
+		if err != nil {
+			return err
+		}
 	}
 }
 
+// readLine 读取一行输入
 func (s *Session) readLine() (string, error) {
 	reader := bufio.NewReader(s.conn)
 
@@ -79,7 +88,7 @@ func (s *Session) readLine() (string, error) {
 	var historyIndex int = -1
 
 	// 显示初始提示符
-	s.writerWrite(s.prompt)
+	s.writerWrite(s.config.Prompt)
 	s.flushWriter()
 
 	for {
@@ -201,14 +210,44 @@ func (s *Session) readLine() (string, error) {
 	}
 }
 
+// processCommand 处理命令
+func (s *Session) processCommand(cmd string) error {
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return nil
+	}
+
+	commandName := parts[0]
+
+	// 查找命令
+	s.mu.RLock()
+	cmdInfo, exists := s.commands[commandName]
+	s.mu.RUnlock()
+
+	if !exists {
+		s.writerWrite(fmt.Sprintf("Unknown command: %s\r\n", commandName))
+		s.writerWrite("Type 'help' for available commands\r\n")
+		return nil
+	}
+
+	// 执行命令处理函数
+	writer := bufio.NewWriter(s.conn)
+	err := cmdInfo.Handler(parts[1:], writer)
+	writer.Flush()
+
+	return err
+}
+
+// redrawLine 重绘当前行
 func (s *Session) redrawLine(line string) {
 	// 清除当前行并重新显示
 	s.writerWrite("\r\x1b[K") // 回到行首并清除整行
-	s.writerWrite(s.prompt)
+	s.writerWrite(s.config.Prompt)
 	s.writerWrite(line)
 	s.flushWriter()
 }
 
+// showCompletions 显示补全选项
 func (s *Session) showCompletions(completions []string) {
 	s.writerWrite("\r\n")
 	for _, comp := range completions {
@@ -217,87 +256,24 @@ func (s *Session) showCompletions(completions []string) {
 	s.flushWriter()
 }
 
+// writerWrite 写入数据
 func (s *Session) writerWrite(data string) {
 	s.conn.Write([]byte(data))
 }
 
+// flushWriter 刷新写入器
 func (s *Session) flushWriter() {
 	// 创建临时的writer来刷新缓冲区
 	writer := bufio.NewWriter(s.conn)
 	writer.Flush()
 }
 
-func (s *Session) processCommand(cmd string) {
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return
-	}
-
-	switch parts[0] {
-	case "help":
-		s.showHelp()
-	case "?":
-		s.showHelp()
-	case "history":
-		s.showHistory()
-	case "clear":
-		s.clearScreen()
-	case "echo":
-		s.echoCommand(parts[1:])
-	case "time":
-		s.showTime()
-	default:
-		s.writerWrite(fmt.Sprintf("Unknown command: %s\r\n", parts[0]))
-		s.writerWrite("Type 'help' for available commands\r\n")
-	}
-}
-
-func (s *Session) showHelp() {
-	// 逐行输出help信息，避免多行字符串的格式问题
-	s.writerWrite("Available commands:\r\n")
-	s.writerWrite("  help     - Show this help message\r\n")
-	s.writerWrite("  history  - Show command history\r\n")
-	s.writerWrite("  clear    - Clear the screen\r\n")
-	s.writerWrite("  echo     - Echo arguments\r\n")
-	s.writerWrite("  time     - Show current time\r\n")
-	s.writerWrite("  exit/quit - Exit the session\r\n")
-}
-
-func (s *Session) showHistory() {
-	history := s.history.GetAll()
-	for i, cmd := range history {
-		s.writerWrite(fmt.Sprintf("%d: %s\r\n", i+1, cmd))
-	}
-}
-
-func (s *Session) clearScreen() {
-	s.writerWrite("\x1b[2J\x1b[H")
-}
-
-func (s *Session) echoCommand(args []string) {
-	if len(args) > 0 {
-		s.writerWrite(strings.Join(args, " ") + "\r\n")
-	} else {
-		s.writerWrite("\r\n")
-	}
-}
-
-func (s *Session) showTime() {
-	s.writerWrite(time.Now().Format("2006-01-02 15:04:05\r\n"))
-}
-
+// sendWelcomeMessage 发送欢迎消息
 func (s *Session) sendWelcomeMessage() {
-	// 逐行输出欢迎消息，避免多行字符串的格式问题
-	s.writerWrite("Welcome to Telnet Command Line Interface!\r\n")
-	s.writerWrite("Type 'help' for available commands.\r\n")
+	s.writerWrite(s.config.WelcomeMsg)
 }
 
-func (s *Session) IsStale() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return time.Since(s.lastActive) > 10*time.Minute
-}
-
+// enableTelnetCharacterMode 启用telnet字符模式
 func (s *Session) enableTelnetCharacterMode() {
 	// Telnet选项协商命令
 	// IAC WILL ECHO: 告诉客户端我们将处理回显
@@ -313,6 +289,14 @@ func (s *Session) enableTelnetCharacterMode() {
 	s.conn.Write(telnetCommands)
 }
 
+// IsStale 检查会话是否过期
+func (s *Session) IsStale() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return time.Since(s.lastActive) > 10*time.Minute
+}
+
+// Close 关闭会话
 func (s *Session) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
