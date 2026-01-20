@@ -35,11 +35,14 @@ func NewTelnetServer(config *Config, commands map[string]CommandInfo) *TelnetSer
 // Start 启动telnet服务器
 func (ts *TelnetServer) Start() error {
 	var err error
+	fmt.Printf("Attempting to listen on port %d...\n", ts.config.Port)
 	ts.listener, err = net.Listen("tcp", fmt.Sprintf(":%d", ts.config.Port))
 	if err != nil {
+		fmt.Printf("Failed to listen on port %d: %v\n", ts.config.Port, err)
 		return fmt.Errorf("failed to start server: %w", err)
 	}
 
+	fmt.Printf("Successfully listening on port %d, starting accept connections...\n", ts.config.Port)
 	go ts.acceptConnections()
 
 	fmt.Printf("Telnet server started on port %d\n", ts.config.Port)

@@ -10,12 +10,12 @@ import (
 	"syscall"
 	"time"
 
-	session "github.com/TrailHuang/tnlcmd"
+	"github.com/TrailHuang/tnlcmd"
 )
 
 func main() {
 	// 创建命令行接口配置
-	config := &session.Config{
+	config := &tnlcmd.Config{
 		Prompt:     "myapp> ",
 		Port:       2323,
 		WelcomeMsg: "Welcome to My Application!\r\nType 'help' for available commands.\r\n",
@@ -23,7 +23,7 @@ func main() {
 	}
 
 	// 创建命令行接口
-	cmdline := session.NewCmdLine(config)
+	cmdline := tnlcmd.NewCmdLine(config)
 
 	// 注册自定义命令
 	cmdline.RegisterCommand("echo", "Echo arguments", echoHandler)

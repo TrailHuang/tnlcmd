@@ -85,25 +85,35 @@ func (c *CmdLine) SetConfig(key, value string) error {
 // Start 启动命令行服务
 func (c *CmdLine) Start() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	if c.isRunning {
+		c.mu.Unlock()
 		return fmt.Errorf("cmdline is already running")
 	}
+	fmt.Printf("Config: %v\n", c.config)
 
-	// 注册内置命令
+	c.isRunning = true
+	c.mu.Unlock() // 释放锁，避免死锁
+
+	// 注册内置命令（在锁外执行，避免死锁）
 	c.registerBuiltinCommands()
-
+	fmt.Printf("registered commands: %v\n", c.commands)
 	// 创建telnet服务器
 	c.server = NewTelnetServer(c.config, c.commands)
+	fmt.Printf("Telnet server created, starting...\n")
 
 	// 启动服务器
 	err := c.server.Start()
 	if err != nil {
+		fmt.Printf("Error starting server: %v\n", err)
+		c.mu.Lock()
+		c.isRunning = false
+		c.mu.Unlock()
 		return err
 	}
+	fmt.Printf("Command line interface started on port %d\n", c.config.Port)
+	fmt.Println("Connect with: telnet localhost 2323")
 
-	c.isRunning = true
 	return nil
 }
 
@@ -126,16 +136,21 @@ func (c *CmdLine) Stop() error {
 
 // registerBuiltinCommands 注册内置命令
 func (c *CmdLine) registerBuiltinCommands() {
+	fmt.Printf("Starting to register builtin commands...\n")
 	// help命令
 	c.RegisterCommand("help", "Show this help message", c.helpHandler)
 	c.RegisterCommand("?", "Show this help message", c.helpHandler)
+	fmt.Printf("Registered help commands\n")
 
 	// set命令
 	c.RegisterCommand("set", "Set configuration parameters", c.setHandler)
+	fmt.Printf("Registered set command\n")
 
 	// exit/quit命令
 	c.RegisterCommand("exit", "Exit the session", c.exitHandler)
 	c.RegisterCommand("quit", "Exit the session", c.exitHandler)
+	fmt.Printf("Registered exit/quit commands\n")
+	fmt.Printf("Builtin commands registration completed\n")
 }
 
 // helpHandler 帮助命令处理函数
