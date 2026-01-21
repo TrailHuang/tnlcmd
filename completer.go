@@ -35,8 +35,20 @@ func (c *CommandCompleter) Complete(input string) []string {
 
 	// 查找匹配的命令
 	for name := range c.commands {
+		// 支持前缀匹配
 		if strings.HasPrefix(name, input) {
 			completions = append(completions, name)
+		} else {
+			// 支持部分匹配：如果输入是命令的一部分，也提供补全
+			// 例如：输入 "sh" 可以匹配 "show test1", "show test2"
+			parts := strings.Split(name, " ")
+			for i := 1; i <= len(parts); i++ {
+				partialCmd := strings.Join(parts[:i], " ")
+				if strings.HasPrefix(partialCmd, input) {
+					completions = append(completions, name)
+					break
+				}
+			}
 		}
 	}
 

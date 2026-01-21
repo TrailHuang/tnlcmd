@@ -217,22 +217,34 @@ func (s *Session) processCommand(cmd string) error {
 		return nil
 	}
 
-	commandName := parts[0]
-
-	// 查找命令
+	// 尝试匹配命令：从最长匹配到最短匹配
 	s.mu.RLock()
-	cmdInfo, exists := s.commands[commandName]
-	s.mu.RUnlock()
+	defer s.mu.RUnlock()
 
-	if !exists {
-		s.writerWrite(fmt.Sprintf("Unknown command: %s\r\n", commandName))
+	var matchedCmd CommandInfo
+	var matched bool
+	var args []string
+
+	// 从最长可能的命令开始尝试匹配
+	for i := len(parts); i > 0; i-- {
+		potentialCmd := strings.Join(parts[:i], " ")
+		if cmdInfo, exists := s.commands[potentialCmd]; exists {
+			matchedCmd = cmdInfo
+			matched = true
+			args = parts[i:]
+			break
+		}
+	}
+
+	if !matched {
+		s.writerWrite(fmt.Sprintf("Unknown command: %s\r\n", parts[0]))
 		s.writerWrite("Type 'help' for available commands\r\n")
 		return nil
 	}
 
 	// 执行命令处理函数
 	writer := bufio.NewWriter(s.conn)
-	err := cmdInfo.Handler(parts[1:], writer)
+	err := matchedCmd.Handler(args, writer)
 	writer.Flush()
 
 	return err
