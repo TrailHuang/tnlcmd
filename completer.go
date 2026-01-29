@@ -106,85 +106,46 @@ func (c *CommandCompleter) Complete(input string) []string {
 func (c *CommandCompleter) GetNextLevelCompletions(input string) []string {
 	var nextLevel []string
 
-	// 如果使用命令树，优先使用树形匹配
 	if c.commandTree != nil {
 		inputParts := strings.Fields(input)
 		node := c.commandTree.Root
 
-		// 遍历到当前层级的前n-1个部分
 		for i := 0; i < len(inputParts)-1; i++ {
 			if child, exists := node.Children[inputParts[i]]; exists {
 				node = child
 			} else {
-				// 找不到匹配节点，返回空
 				return nextLevel
 			}
 		}
 
-		// 获取当前节点的所有子节点（只显示命令节点）
 		var matchingChildren []string
 		lastPart := ""
 		if len(inputParts) > 0 {
 			lastPart = inputParts[len(inputParts)-1]
 		}
 
-		for name, child := range node.Children {
-			if child.Type == NodeTypeCommand {
-				// 如果最后一个部分为空，或者子节点名称以最后一个部分开头
-				if lastPart == "" || strings.HasPrefix(name, lastPart) {
-					matchingChildren = append(matchingChildren, name)
-				}
+		for name := range node.Children {
+			if strings.HasPrefix(name, lastPart) {
+				matchingChildren = append(matchingChildren, name)
 			}
 		}
 
-		// 智能补全逻辑：构建完整的命令路径
 		if len(matchingChildren) == 1 {
-			// 检查当前节点是否有子节点（参数节点）
-			childNode := node.Children[matchingChildren[0]]
-			if childNode != nil && len(childNode.Children) > 0 {
-				// 当前节点有参数子节点，应该继续补全参数而不是重新构建命令
-				// 返回空数组，让调用方处理参数补全
-				nextLevel = []string{}
+			baseParts := inputParts[:len(inputParts)-1]
+			var fullCommand string
+			if len(baseParts) > 0 {
+				fullCommand = strings.Join(baseParts, " ") + " " + matchingChildren[0]
 			} else {
-				// 构建完整的命令路径（不包含输入的前缀部分）
-				baseParts := inputParts[:len(inputParts)-1] // 去掉最后一个前缀部分
-				fullCommand := strings.Join(baseParts, " ") + " " + matchingChildren[0]
-				nextLevel = []string{fullCommand}
+				fullCommand = matchingChildren[0]
 			}
+			nextLevel = []string{fullCommand}
 		} else if len(matchingChildren) > 1 {
-			// 检查是否存在多个不同的前缀模式
-			allSamePrefix := true
-			firstChild := matchingChildren[0]
-
-			// 检查所有匹配项是否都以第一个匹配项为前缀
-			for i := 1; i < len(matchingChildren); i++ {
-				if !strings.HasPrefix(matchingChildren[i], firstChild) {
-					allSamePrefix = false
-					break
-				}
-			}
-
-			if allSamePrefix {
-				// 所有匹配项都以第一个匹配项为前缀，说明只有一个前缀模式
-				// 例如：de 匹配 debug 和 debug2，但都以 debug 为前缀
-				// 构建完整的命令路径（不包含输入的前缀部分）
-				baseParts := inputParts[:len(inputParts)-1] // 去掉最后一个前缀部分
-				fullCommand := strings.Join(baseParts, " ") + " " + firstChild
-				nextLevel = []string{fullCommand}
-			} else {
-				// 存在多个不同的前缀模式，返回所有匹配项的完整路径
-				baseParts := inputParts[:len(inputParts)-1] // 去掉最后一个前缀部分
-				for _, child := range matchingChildren {
-					fullCommand := strings.Join(baseParts, " ") + " " + child
-					nextLevel = append(nextLevel, fullCommand)
-				}
-			}
+			nextLevel = matchingChildren
 		}
 
 		return nextLevel
 	}
 
-	// 如果命令树为 nil，直接返回空结果
 	return nextLevel
 }
 
@@ -201,4 +162,114 @@ func (c *CommandCompleter) GetCommandSuggestions(input string) []string {
 	// 这个方法需要重新设计以使用命令树结构
 	// 目前返回空结果，待后续实现
 	return suggestions
+}
+
+// GetCompletions 获取补全选项（统一入口）
+func (c *CommandCompleter) GetCompletions(input string) []string {
+	var completions []string
+
+	if c.commandTree == nil {
+		return completions
+	}
+
+	inputParts := strings.Fields(input)
+	node := c.commandTree.Root
+
+	for i := 0; i < len(inputParts)-1; i++ {
+		if child, exists := node.Children[inputParts[i]]; exists {
+			node = child
+		} else {
+			return completions
+		}
+	}
+
+	if len(inputParts) == 0 {
+		for name, child := range node.Children {
+			if child.Type == NodeTypeCommand {
+				completions = append(completions, name)
+			}
+		}
+		return completions
+	}
+
+	currentInput := inputParts[len(inputParts)-1]
+	var matchingChildren []string
+
+	for name, child := range node.Children {
+		if child.Type == NodeTypeCommand && strings.HasPrefix(name, currentInput) {
+			matchingChildren = append(matchingChildren, name)
+		}
+	}
+
+	if len(matchingChildren) == 1 {
+		completions = matchingChildren
+	} else if len(matchingChildren) > 1 {
+		allSamePrefix := true
+		firstChild := matchingChildren[0]
+
+		for i := 1; i < len(matchingChildren); i++ {
+			if !strings.HasPrefix(matchingChildren[i], firstChild) {
+				allSamePrefix = false
+				break
+			}
+		}
+
+		if allSamePrefix {
+			completions = []string{firstChild}
+		} else {
+			completions = matchingChildren
+		}
+	}
+
+	return completions
+}
+
+// GetParameterCompletions 获取参数补全选项
+func (c *CommandCompleter) GetParameterCompletions(input string) []string {
+	var completions []string
+
+	if c.commandTree == nil {
+		return completions
+	}
+
+	inputParts := strings.Fields(input)
+	node := c.commandTree.Root
+
+	for i := 0; i < len(inputParts); i++ {
+		if child, exists := node.Children[inputParts[i]]; exists {
+			node = child
+		} else {
+			return completions
+		}
+	}
+
+	var lastPart string
+	if len(inputParts) > 0 {
+		lastPart = inputParts[len(inputParts)-1]
+	}
+
+	for name, child := range node.Children {
+		if child.Type != NodeTypeCommand && strings.HasPrefix(name, lastPart) {
+			completions = append(completions, name)
+		}
+	}
+
+	return completions
+}
+
+// GetRootCommands 获取根命令列表
+func (c *CommandCompleter) GetRootCommands() []string {
+	var commands []string
+
+	if c.commandTree == nil {
+		return commands
+	}
+
+	for name, child := range c.commandTree.Root.Children {
+		if child.Type == NodeTypeCommand {
+			commands = append(commands, name)
+		}
+	}
+
+	return commands
 }

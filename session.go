@@ -170,97 +170,42 @@ func (s *Session) readLine() (string, error) {
 					s.redrawLine(buffer.String())
 				}
 			case 0x09: // Tab - 命令补全
-				// 立即处理Tab键，不需要等待Enter
 				currentInput := buffer.String()
-
-				// 分析当前输入，按空格拆分
 				inputParts := strings.Fields(currentInput)
 
 				if len(inputParts) == 0 {
-					// 空输入，显示所有一级命令
-					completions := s.completer.Complete("")
+					completions := s.completer.GetRootCommands()
 					if len(completions) > 0 {
 						s.showCompletions(completions)
-						s.redrawLine(currentInput)
+						s.flushWriter()
+						s.redrawLine("")
 					}
 					continue
 				}
 
-				// 获取下一级补全选项
 				nextLevelCompletions := s.completer.GetNextLevelCompletions(currentInput)
 
-				if len(nextLevelCompletions) == 1 {
-					// 单个下一级选项，进行智能补全
-					// 现在 GetNextLevelCompletions 返回的是完整的命令路径
-					buffer.Reset()
-					buffer.WriteString(nextLevelCompletions[0])
-					s.redrawLine(buffer.String())
-				} else if len(nextLevelCompletions) == 0 {
-					// 没有下一级选项，说明当前命令已经完整，应该显示参数补全
-					// 不重置缓冲区，保持当前输入不变
-					s.writerWrite("\x07") // 发出提示音
-					s.flushWriter()
-				} else {
-					// 如果没有下一级选项或有多选项，使用完整命令补全
-					completions := s.completer.Complete(currentInput)
-
-					if len(completions) == 1 {
-						// 单个完整命令匹配
-						completion := completions[0]
-						completionParts := strings.Fields(completion)
-
-						if len(inputParts) > 0 && len(completionParts) >= len(inputParts) {
-							// 检查是否所有输入部分都匹配补全命令的前缀
-							matched := true
-							for i := 0; i < len(inputParts); i++ {
-								if i >= len(completionParts) || !strings.HasPrefix(completionParts[i], inputParts[i]) {
-									matched = false
-									break
-								}
-							}
-
-							if matched {
-								// 逐步补全：只补全下一级
-								if len(inputParts) < len(completionParts) {
-									// 补全到下一级
-									newInput := strings.Join(completionParts[:len(inputParts)+1], " ")
-									buffer.Reset()
-									buffer.WriteString(newInput)
-									s.redrawLine(buffer.String())
-								} else {
-									// 已经是最后一级，补全整个命令
-									buffer.Reset()
-									buffer.WriteString(completion)
-									s.redrawLine(buffer.String())
-								}
-							} else {
-								// 输入部分不匹配，直接补全整个命令
-								buffer.Reset()
-								buffer.WriteString(completion)
-								s.redrawLine(buffer.String())
-							}
-						} else {
-							// 直接补全整个命令
-							buffer.Reset()
-							buffer.WriteString(completion)
-							s.redrawLine(buffer.String())
-						}
-					} else if len(nextLevelCompletions) > 1 {
-						// 多个下一级选项，显示所有可能的补全选项
-						s.showCompletions(nextLevelCompletions)
-						s.redrawLine(currentInput)
-					} else if len(completions) > 1 {
-						// 多个完整命令匹配，显示选项
-						s.showCompletions(completions)
-						s.redrawLine(currentInput)
+				switch len(nextLevelCompletions) {
+				case 0:
+					paramCompletions := s.completer.GetParameterCompletions(currentInput)
+					if len(paramCompletions) > 0 {
+						s.showCompletions(paramCompletions)
+						s.flushWriter()
+						s.redrawLine(buffer.String())
 					} else {
-						// 没有匹配项，发出提示音
 						s.writerWrite("\x07")
 						s.flushWriter()
 					}
+				case 1:
+					buffer.Reset()
+					buffer.WriteString(nextLevelCompletions[0])
+					s.redrawLine(buffer.String())
+				default:
+					s.showCompletions(nextLevelCompletions)
+					s.flushWriter()
+					s.redrawLine(buffer.String())
 				}
 
-				// 继续等待用户输入
 				continue
 			case 0x3F: // ? - 显示命令提示
 				// 立即处理?键，显示当前可用的命令选项
