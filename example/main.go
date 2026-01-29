@@ -31,6 +31,8 @@ func main() {
 	cmdline.RegisterCommand("status", "Show application status", statusHandler)
 	cmdline.RegisterCommand("show test1", "Show test1 information", showTest1Handler)
 	cmdline.RegisterCommand("show test2", "Show test2 information", showTest2Handler)
+	cmdline.RegisterCommand("show time", "Show detailed time information", showTimeHandler)
+	cmdline.RegisterCommand("show date", "Show current date", showDateHandler)
 	cmdline.RegisterCommand("set test3 <1-100>", "Set test3 parameter", setTest3Handler)
 
 	// 启动命令行服务
@@ -117,6 +119,28 @@ func setTest3Handler(args []string, writer io.Writer) error {
 
 	value := args[0]
 	message := fmt.Sprintf("Test3 parameter set to: %s\r\n", value)
+	writer.Write([]byte(message))
+	return nil
+}
+
+// showTimeHandler 显示详细时间信息
+func showTimeHandler(args []string, writer io.Writer) error {
+	currentTime := time.Now()
+	message := fmt.Sprintf("Detailed Time Information:\r\n")
+	message += fmt.Sprintf("  Time: %s\r\n", currentTime.Format("15:04:05"))
+	message += fmt.Sprintf("  Timezone: %s\r\n", currentTime.Format("MST"))
+	message += fmt.Sprintf("  Unix Timestamp: %d\r\n", currentTime.Unix())
+	writer.Write([]byte(message))
+	return nil
+}
+
+// showDateHandler 显示当前日期
+func showDateHandler(args []string, writer io.Writer) error {
+	currentTime := time.Now()
+	message := fmt.Sprintf("Date Information:\r\n")
+	message += fmt.Sprintf("  Date: %s\r\n", currentTime.Format("2006-01-02"))
+	message += fmt.Sprintf("  Day of Week: %s\r\n", currentTime.Format("Monday"))
+	message += fmt.Sprintf("  Day of Year: %d\r\n", currentTime.YearDay())
 	writer.Write([]byte(message))
 	return nil
 }

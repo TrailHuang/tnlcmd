@@ -91,8 +91,15 @@ func (ts *TelnetServer) acceptConnections() {
 
 // handleConnection 处理连接
 func (ts *TelnetServer) handleConnection(conn net.Conn) {
+	// 创建命令上下文（每个连接独立）
+	context := &CommandContext{
+		CurrentMode: ts.config.RootMode,
+		Path:        []string{},
+		Variables:   make(map[string]string),
+	}
+
 	// 创建会话
-	session := NewSession(conn, ts.config, ts.commands)
+	session := NewSessionWithContext(conn, ts.config, context)
 
 	// 注册会话
 	ts.mu.Lock()
@@ -105,10 +112,9 @@ func (ts *TelnetServer) handleConnection(conn net.Conn) {
 		fmt.Printf("Session error: %v\n", err)
 	}
 
-	// 清理会话
+	// 会话结束，清理
 	ts.mu.Lock()
 	delete(ts.sessions, conn)
 	ts.mu.Unlock()
-
 	conn.Close()
 }

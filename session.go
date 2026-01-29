@@ -21,6 +21,8 @@ type Session struct {
 	isClosed   bool
 	history    *CommandHistory
 	completer  *CommandCompleter
+	context    *CommandContext
+	prompt     string
 }
 
 // NewSession 创建新的会话
@@ -30,6 +32,7 @@ func NewSession(conn net.Conn, config *Config, commands map[string]CommandInfo) 
 		config:     config,
 		commands:   commands,
 		lastActive: time.Now(),
+		prompt:     config.Prompt,
 	}
 
 	s.history = NewCommandHistory(config.MaxHistory)
@@ -40,6 +43,40 @@ func NewSession(conn net.Conn, config *Config, commands map[string]CommandInfo) 
 	s.enableTelnetCharacterMode()
 
 	return s
+}
+
+// NewSessionWithContext 创建带上下文的新会话
+func NewSessionWithContext(conn net.Conn, config *Config, context *CommandContext) *Session {
+	s := &Session{
+		conn:       conn,
+		config:     config,
+		lastActive: time.Now(),
+		context:    context,
+		prompt:     context.CurrentMode.Prompt,
+	}
+
+	s.history = NewCommandHistory(config.MaxHistory)
+	s.completer = NewCommandCompleter()
+
+	// 更新命令列表
+	s.updateCommands()
+
+	// 启用telnet字符模式
+	s.enableTelnetCharacterMode()
+
+	return s
+}
+
+// updateCommands 更新当前可用的命令列表
+func (s *Session) updateCommands() {
+	if s.context != nil {
+		s.commands = s.context.GetAvailableCommands()
+		s.prompt = s.context.CurrentMode.Prompt
+	} else {
+		s.commands = make(map[string]CommandInfo)
+		s.prompt = s.config.Prompt
+	}
+	s.completer.UpdateCommands(s.commands)
 }
 
 // Handle 处理会话
@@ -88,7 +125,7 @@ func (s *Session) readLine() (string, error) {
 	var historyIndex int = -1
 
 	// 显示初始提示符
-	s.writerWrite(s.config.Prompt)
+	s.writerWrite(s.prompt)
 	s.flushWriter()
 
 	for {
@@ -134,10 +171,34 @@ func (s *Session) readLine() (string, error) {
 				completions := s.completer.Complete(currentInput)
 
 				if len(completions) == 1 {
-					// 单个匹配，直接补全
-					buffer.Reset()
-					buffer.WriteString(completions[0])
-					s.redrawLine(buffer.String())
+					// 单个匹配，进行智能补全
+					completion := completions[0]
+
+					// 分析当前输入，按空格拆分
+					inputParts := strings.Fields(currentInput)
+					completionParts := strings.Fields(completion)
+
+					if len(inputParts) > 0 && len(completionParts) >= len(inputParts) {
+						// 逐步补全：只补全下一级
+						if len(inputParts) < len(completionParts) {
+							// 补全到下一级
+							newInput := strings.Join(completionParts[:len(inputParts)+1], " ")
+							buffer.Reset()
+							buffer.WriteString(newInput)
+							s.redrawLine(buffer.String())
+						} else {
+							// 已经是最后一级，补全整个命令
+							buffer.Reset()
+							buffer.WriteString(completion)
+							s.redrawLine(buffer.String())
+						}
+					} else {
+						// 直接补全整个命令
+						buffer.Reset()
+						buffer.WriteString(completion)
+						s.redrawLine(buffer.String())
+					}
+
 					// 补全后不换行，光标停留在命令末尾
 					// 继续等待用户输入（按Enter执行或继续编辑）
 					continue
@@ -247,6 +308,11 @@ func (s *Session) processCommand(cmd string) error {
 	err := matchedCmd.Handler(args, writer)
 	writer.Flush()
 
+	// 命令执行后，检查是否需要更新命令列表（例如模式切换后）
+	if s.context != nil {
+		s.updateCommands()
+	}
+
 	return err
 }
 
@@ -254,7 +320,7 @@ func (s *Session) processCommand(cmd string) error {
 func (s *Session) redrawLine(line string) {
 	// 清除当前行并重新显示
 	s.writerWrite("\r\x1b[K") // 回到行首并清除整行
-	s.writerWrite(s.config.Prompt)
+	s.writerWrite(s.prompt)
 	s.writerWrite(line)
 	s.flushWriter()
 }

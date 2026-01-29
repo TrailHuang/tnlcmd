@@ -22,6 +22,7 @@ type Config struct {
 	Port       int
 	WelcomeMsg string
 	MaxHistory int
+	RootMode   *CommandMode
 }
 
 // CmdLine 命令行接口
@@ -31,6 +32,8 @@ type CmdLine struct {
 	mu        sync.RWMutex
 	server    *TelnetServer
 	isRunning bool
+	rootMode  *CommandMode
+	context   *CommandContext
 }
 
 // NewCmdLine 创建新的命令行接口
@@ -44,21 +47,76 @@ func NewCmdLine(config *Config) *CmdLine {
 		}
 	}
 
+	// 创建根模式
+	rootMode := NewCommandMode("root", config.Prompt, "privileged EXEC mode")
+
+	// 设置配置的根模式
+	config.RootMode = rootMode
+
+	// 创建命令上下文
+	context := &CommandContext{
+		CurrentMode: rootMode,
+		Path:        []string{},
+		Variables:   make(map[string]string),
+	}
+
 	return &CmdLine{
 		config:   config,
 		commands: make(map[string]CommandInfo),
+		rootMode: rootMode,
+		context:  context,
 	}
 }
 
-// RegisterCommand 注册命令
+// RegisterCommand 注册命令到根模式
 func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.commands[name] = CommandInfo{
-		Name:        name,
-		Description: description,
-		Handler:     handler,
+	c.rootMode.AddCommand(name, description, handler)
+}
+
+// RegisterModeCommand 注册命令到指定模式
+func (c *CmdLine) RegisterModeCommand(modePath string, name, description string, handler CommandHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// 查找或创建模式路径
+	currentMode := c.rootMode
+	if modePath != "" {
+		modeName := modePath
+		if subMode, exists := currentMode.Children[modeName]; exists {
+			currentMode = subMode
+		} else {
+			// 创建新的子模式
+			subMode = NewCommandMode(modeName, modeName, fmt.Sprintf("%s configuration", modeName))
+			currentMode.AddSubMode(subMode)
+			currentMode = subMode
+		}
+	}
+
+	currentMode.AddCommand(name, description, handler)
+}
+
+// CreateMode 创建新的命令模式
+func (c *CmdLine) CreateMode(modePath string, description string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	currentMode := c.rootMode
+	if modePath != "" {
+		modeName := modePath
+		if subMode, exists := currentMode.Children[modeName]; exists {
+			currentMode = subMode
+		} else {
+			// 创建新的子模式
+			// 子视图Prompt只包含子模式名称，以'#'结束
+			prompt := modeName
+
+			subMode = NewCommandMode(modeName, prompt, description)
+			currentMode.AddSubMode(subMode)
+			currentMode = subMode
+		}
 	}
 }
 
@@ -158,10 +216,21 @@ func (c *CmdLine) helpHandler(args []string, writer io.Writer) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	// 使用命令上下文获取当前模式下的所有可用命令
+	commands := c.context.GetAvailableCommands()
+
 	writer.Write([]byte("Available commands:\r\n"))
-	for _, cmd := range c.commands {
-		writer.Write([]byte(fmt.Sprintf("  %-10s - %s\r\n", cmd.Name, cmd.Description)))
+	for name, cmd := range commands {
+		// 跳过内置命令的重复显示
+		if name == "help" || name == "?" {
+			continue
+		}
+		writer.Write([]byte(fmt.Sprintf("  %-15s - %s\r\n", name, cmd.Description)))
 	}
+
+	// 显示内置命令
+	writer.Write([]byte("  help/?          - Show this help message\r\n"))
+
 	return nil
 }
 
