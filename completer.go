@@ -139,10 +139,18 @@ func (c *CommandCompleter) GetNextLevelCompletions(input string) []string {
 
 		// 智能补全逻辑：构建完整的命令路径
 		if len(matchingChildren) == 1 {
-			// 构建完整的命令路径（不包含输入的前缀部分）
-			baseParts := inputParts[:len(inputParts)-1] // 去掉最后一个前缀部分
-			fullCommand := strings.Join(baseParts, " ") + " " + matchingChildren[0]
-			nextLevel = []string{fullCommand}
+			// 检查当前节点是否有子节点（参数节点）
+			childNode := node.Children[matchingChildren[0]]
+			if childNode != nil && len(childNode.Children) > 0 {
+				// 当前节点有参数子节点，应该继续补全参数而不是重新构建命令
+				// 返回空数组，让调用方处理参数补全
+				nextLevel = []string{}
+			} else {
+				// 构建完整的命令路径（不包含输入的前缀部分）
+				baseParts := inputParts[:len(inputParts)-1] // 去掉最后一个前缀部分
+				fullCommand := strings.Join(baseParts, " ") + " " + matchingChildren[0]
+				nextLevel = []string{fullCommand}
+			}
 		} else if len(matchingChildren) > 1 {
 			// 检查是否存在多个不同的前缀模式
 			allSamePrefix := true

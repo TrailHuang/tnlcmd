@@ -195,6 +195,11 @@ func (s *Session) readLine() (string, error) {
 					buffer.Reset()
 					buffer.WriteString(nextLevelCompletions[0])
 					s.redrawLine(buffer.String())
+				} else if len(nextLevelCompletions) == 0 {
+					// 没有下一级选项，说明当前命令已经完整，应该显示参数补全
+					// 不重置缓冲区，保持当前输入不变
+					s.writerWrite("\x07") // 发出提示音
+					s.flushWriter()
 				} else {
 					// 如果没有下一级选项或有多选项，使用完整命令补全
 					completions := s.completer.Complete(currentInput)
