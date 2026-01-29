@@ -37,7 +37,6 @@ func NewSession(conn net.Conn, config *Config, commands map[string]CommandInfo) 
 
 	s.history = NewCommandHistory(config.MaxHistory)
 	s.completer = NewCommandCompleter()
-	s.completer.UpdateCommands(commands)
 
 	// 启用telnet字符模式
 	s.enableTelnetCharacterMode()
@@ -56,7 +55,7 @@ func NewSessionWithContext(conn net.Conn, config *Config, context *CommandContex
 	}
 
 	s.history = NewCommandHistory(config.MaxHistory)
-	s.completer = NewCommandCompleter()
+	s.completer = NewCommandCompleterWithTree(context.commandTree)
 
 	// 更新命令列表
 	s.updateCommands()
@@ -72,11 +71,14 @@ func (s *Session) updateCommands() {
 	if s.context != nil {
 		s.commands = s.context.GetAvailableCommands()
 		s.prompt = s.context.CurrentMode.Prompt
+		// 更新补全器的命令树
+		if s.context.commandTree != nil {
+			s.completer.UpdateCommandTree(s.context.commandTree)
+		}
 	} else {
 		s.commands = make(map[string]CommandInfo)
 		s.prompt = s.config.Prompt
 	}
-	s.completer.UpdateCommands(s.commands)
 }
 
 // Handle 处理会话
@@ -184,55 +186,71 @@ func (s *Session) readLine() (string, error) {
 
 				// 获取下一级补全选项
 				nextLevelCompletions := s.completer.GetNextLevelCompletions(currentInput)
-				completions := s.completer.Complete(currentInput)
 
 				if len(nextLevelCompletions) == 1 {
 					// 单个下一级选项，进行智能补全
-					newInput := currentInput
-					if !strings.HasSuffix(currentInput, " ") {
-						newInput = strings.TrimSpace(currentInput) + " "
-					}
-					newInput += nextLevelCompletions[0]
+					// 现在 GetNextLevelCompletions 返回的是完整的命令路径
 					buffer.Reset()
-					buffer.WriteString(newInput)
+					buffer.WriteString(nextLevelCompletions[0])
 					s.redrawLine(buffer.String())
-				} else if len(completions) == 1 {
-					// 单个完整命令匹配
-					completion := completions[0]
-					completionParts := strings.Fields(completion)
+				} else {
+					// 如果没有下一级选项或有多选项，使用完整命令补全
+					completions := s.completer.Complete(currentInput)
 
-					if len(inputParts) > 0 && len(completionParts) >= len(inputParts) {
-						// 逐步补全：只补全下一级
-						if len(inputParts) < len(completionParts) {
-							// 补全到下一级
-							newInput := strings.Join(completionParts[:len(inputParts)+1], " ")
-							buffer.Reset()
-							buffer.WriteString(newInput)
-							s.redrawLine(buffer.String())
+					if len(completions) == 1 {
+						// 单个完整命令匹配
+						completion := completions[0]
+						completionParts := strings.Fields(completion)
+
+						if len(inputParts) > 0 && len(completionParts) >= len(inputParts) {
+							// 检查是否所有输入部分都匹配补全命令的前缀
+							matched := true
+							for i := 0; i < len(inputParts); i++ {
+								if i >= len(completionParts) || !strings.HasPrefix(completionParts[i], inputParts[i]) {
+									matched = false
+									break
+								}
+							}
+
+							if matched {
+								// 逐步补全：只补全下一级
+								if len(inputParts) < len(completionParts) {
+									// 补全到下一级
+									newInput := strings.Join(completionParts[:len(inputParts)+1], " ")
+									buffer.Reset()
+									buffer.WriteString(newInput)
+									s.redrawLine(buffer.String())
+								} else {
+									// 已经是最后一级，补全整个命令
+									buffer.Reset()
+									buffer.WriteString(completion)
+									s.redrawLine(buffer.String())
+								}
+							} else {
+								// 输入部分不匹配，直接补全整个命令
+								buffer.Reset()
+								buffer.WriteString(completion)
+								s.redrawLine(buffer.String())
+							}
 						} else {
-							// 已经是最后一级，补全整个命令
+							// 直接补全整个命令
 							buffer.Reset()
 							buffer.WriteString(completion)
 							s.redrawLine(buffer.String())
 						}
+					} else if len(nextLevelCompletions) > 1 {
+						// 多个下一级选项，显示所有可能的补全选项
+						s.showCompletions(nextLevelCompletions)
+						s.redrawLine(currentInput)
+					} else if len(completions) > 1 {
+						// 多个完整命令匹配，显示选项
+						s.showCompletions(completions)
+						s.redrawLine(currentInput)
 					} else {
-						// 直接补全整个命令
-						buffer.Reset()
-						buffer.WriteString(completion)
-						s.redrawLine(buffer.String())
+						// 没有匹配项，发出提示音
+						s.writerWrite("\x07")
+						s.flushWriter()
 					}
-				} else if len(nextLevelCompletions) > 1 {
-					// 多个下一级选项，显示所有可能的补全选项
-					s.showCompletions(nextLevelCompletions)
-					s.redrawLine(currentInput)
-				} else if len(completions) > 1 {
-					// 多个完整命令匹配，显示选项
-					s.showCompletions(completions)
-					s.redrawLine(currentInput)
-				} else {
-					// 没有匹配项，发出提示音
-					s.writerWrite("\x07")
-					s.flushWriter()
 				}
 
 				// 继续等待用户输入
