@@ -30,6 +30,10 @@ func main() {
 	cmdline.RegisterCommand("ping IP", "Send echo messages", pingHandler)
 	cmdline.RegisterCommand("clear", "Reset functions", clearHandler)
 	cmdline.RegisterCommand("debug", "Debugging functions", debugHandler)
+	cmdline.RegisterCommand("set debug <1-10>", "Debugging functions", setValueHandler)
+	cmdline.RegisterCommand("set debug info STRING", "Debugging functions", setValueHandler)
+	cmdline.RegisterCommand("set name STRING", "Debugging functions", setValueHandler)
+	cmdline.RegisterCommand("set filter-switch (on|off)", "Debugging functions", setValueHandler)
 
 	// 创建配置模式
 	cmdline.CreateMode("configure", "global configuration")
@@ -102,9 +106,16 @@ func showHandler(args []string, writer io.Writer) error {
 	return nil
 }
 
-func configureHandler(args []string, writer io.Writer) error {
-	writer.Write([]byte("Entering configuration mode\r\n"))
+func setValueHandler(args []string, writer io.Writer) error {
+	if len(args) == 0 {
+		writer.Write([]byte("Usage: set <parameter> <value>\r\n"))
+		writer.Write([]byte("Available parameters: debug, name\r\n"))
+		return nil
+	}
+
+	writer.Write([]byte(fmt.Sprintf("arg count %d,  '%v'\r\n", len(args), args)))
 	return nil
+
 }
 
 func pingHandler(args []string, writer io.Writer) error {

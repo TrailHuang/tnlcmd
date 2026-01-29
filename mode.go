@@ -19,8 +19,9 @@ type CommandMode struct {
 // CommandContext 命令上下文
 type CommandContext struct {
 	CurrentMode *CommandMode
-	Path        []string // 当前模式路径
+	Path        []string
 	Variables   map[string]string
+	commandTree *CommandTree
 }
 
 // NewCommandMode 创建新的命令模式

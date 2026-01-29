@@ -168,14 +168,37 @@ func (s *Session) readLine() (string, error) {
 			case 0x09: // Tab - 命令补全
 				// 立即处理Tab键，不需要等待Enter
 				currentInput := buffer.String()
+
+				// 分析当前输入，按空格拆分
+				inputParts := strings.Fields(currentInput)
+
+				if len(inputParts) == 0 {
+					// 空输入，显示所有一级命令
+					completions := s.completer.Complete("")
+					if len(completions) > 0 {
+						s.showCompletions(completions)
+						s.redrawLine(currentInput)
+					}
+					continue
+				}
+
+				// 获取下一级补全选项
+				nextLevelCompletions := s.completer.GetNextLevelCompletions(currentInput)
 				completions := s.completer.Complete(currentInput)
 
-				if len(completions) == 1 {
-					// 单个匹配，进行智能补全
+				if len(nextLevelCompletions) == 1 {
+					// 单个下一级选项，进行智能补全
+					newInput := currentInput
+					if !strings.HasSuffix(currentInput, " ") {
+						newInput = strings.TrimSpace(currentInput) + " "
+					}
+					newInput += nextLevelCompletions[0]
+					buffer.Reset()
+					buffer.WriteString(newInput)
+					s.redrawLine(buffer.String())
+				} else if len(completions) == 1 {
+					// 单个完整命令匹配
 					completion := completions[0]
-
-					// 分析当前输入，按空格拆分
-					inputParts := strings.Fields(currentInput)
 					completionParts := strings.Fields(completion)
 
 					if len(inputParts) > 0 && len(completionParts) >= len(inputParts) {
@@ -198,24 +221,89 @@ func (s *Session) readLine() (string, error) {
 						buffer.WriteString(completion)
 						s.redrawLine(buffer.String())
 					}
-
-					// 补全后不换行，光标停留在命令末尾
-					// 继续等待用户输入（按Enter执行或继续编辑）
-					continue
-				} else if len(completions) > 1 {
-					// 多个匹配，显示选项
-					s.showCompletions(completions)
-					// 重新显示当前输入，光标停留在当前位置
+				} else if len(nextLevelCompletions) > 1 {
+					// 多个下一级选项，显示所有可能的补全选项
+					s.showCompletions(nextLevelCompletions)
 					s.redrawLine(currentInput)
-					// 继续等待用户输入
-					continue
+				} else if len(completions) > 1 {
+					// 多个完整命令匹配，显示选项
+					s.showCompletions(completions)
+					s.redrawLine(currentInput)
 				} else {
 					// 没有匹配项，发出提示音
 					s.writerWrite("\x07")
 					s.flushWriter()
-					// 继续等待用户输入
-					continue
 				}
+
+				// 继续等待用户输入
+				continue
+			case 0x3F: // ? - 显示命令提示
+				// 立即处理?键，显示当前可用的命令选项
+				currentInput := buffer.String()
+
+				// 分析输入，按空格拆分
+				inputParts := strings.Fields(currentInput)
+
+				// 首先尝试使用命令树进行智能提示（如果可用）
+				if s.context != nil && s.context.commandTree != nil {
+					node := s.context.commandTree.Root
+
+					// 遍历到当前层级
+					for i := 0; i < len(inputParts); i++ {
+						if child, exists := node.Children[inputParts[i]]; exists {
+							node = child
+						} else {
+							// 找不到匹配节点，使用默认提示
+							node = nil
+							break
+						}
+					}
+
+					if node != nil {
+						// 显示当前节点的所有子节点（包括参数节点）
+						var suggestions []string
+						for name := range node.Children {
+							suggestions = append(suggestions, name)
+						}
+
+						if len(suggestions) > 0 {
+							s.showCompletions(suggestions)
+							s.redrawLine(currentInput)
+							continue
+						}
+					}
+				}
+
+				// 向后兼容：使用旧的补全逻辑
+				if len(inputParts) == 0 {
+					// 空输入，显示所有一级命令
+					completions := s.completer.Complete("")
+					if len(completions) > 0 {
+						s.showCompletions(completions)
+						s.redrawLine(currentInput)
+					}
+				} else {
+					// 获取下一级补全选项
+					nextLevelCompletions := s.completer.GetNextLevelCompletions(currentInput)
+					if len(nextLevelCompletions) > 0 {
+						s.showCompletions(nextLevelCompletions)
+						s.redrawLine(currentInput)
+					} else {
+						// 没有下一级选项，显示当前可用的完整命令
+						completions := s.completer.GetCommandSuggestions(currentInput)
+						if len(completions) > 0 {
+							s.showCompletions(completions)
+							s.redrawLine(currentInput)
+						} else {
+							// 没有可用命令，显示提示信息
+							s.writerWrite("\r\nNo commands available\r\n")
+							s.redrawLine(currentInput)
+						}
+					}
+				}
+
+				// 继续等待用户输入
+				continue
 			case 0x0D, 0x0A: // Enter
 				s.writerWrite("\r\n")
 				s.flushWriter()
@@ -278,42 +366,30 @@ func (s *Session) processCommand(cmd string) error {
 		return nil
 	}
 
-	// 尝试匹配命令：从最长匹配到最短匹配
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var matchedCmd CommandInfo
-	var matched bool
-	var args []string
+	// 使用命令树进行智能匹配
+	if s.context != nil && s.context.commandTree != nil {
+		node, matchedPath, err := s.context.commandTree.FindCommand(parts)
+		if err == nil && node != nil && node.Handler != nil {
+			// 使用命令树匹配成功，执行对应的处理函数
+			// 参数部分为匹配路径之后的所有部分
+			args := parts[len(matchedPath):]
+			writer := bufio.NewWriter(s.conn)
+			err := node.Handler(args, writer)
+			writer.Flush()
 
-	// 从最长可能的命令开始尝试匹配
-	for i := len(parts); i > 0; i-- {
-		potentialCmd := strings.Join(parts[:i], " ")
-		if cmdInfo, exists := s.commands[potentialCmd]; exists {
-			matchedCmd = cmdInfo
-			matched = true
-			args = parts[i:]
-			break
+			// 命令执行后，检查是否需要更新命令列表
+			s.updateCommands()
+			return err
 		}
 	}
 
-	if !matched {
-		s.writerWrite(fmt.Sprintf("Unknown command: %s\r\n", parts[0]))
-		s.writerWrite("Type 'help' for available commands\r\n")
-		return nil
-	}
-
-	// 执行命令处理函数
-	writer := bufio.NewWriter(s.conn)
-	err := matchedCmd.Handler(args, writer)
-	writer.Flush()
-
-	// 命令执行后，检查是否需要更新命令列表（例如模式切换后）
-	if s.context != nil {
-		s.updateCommands()
-	}
-
-	return err
+	// 命令树匹配失败，显示错误信息
+	s.writerWrite(fmt.Sprintf("Unknown command: %s\r\n", strings.Join(parts, " ")))
+	s.writerWrite("Type 'help' for available commands\r\n")
+	return nil
 }
 
 // redrawLine 重绘当前行

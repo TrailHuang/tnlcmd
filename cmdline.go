@@ -27,13 +27,14 @@ type Config struct {
 
 // CmdLine 命令行接口
 type CmdLine struct {
-	config    *Config
-	commands  map[string]CommandInfo
-	mu        sync.RWMutex
-	server    *TelnetServer
-	isRunning bool
-	rootMode  *CommandMode
-	context   *CommandContext
+	config      *Config
+	commands    map[string]CommandInfo // 向后兼容的平面命令存储
+	commandTree *CommandTree           // 新的树形命令存储
+	mu          sync.RWMutex
+	server      *TelnetServer
+	isRunning   bool
+	rootMode    *CommandMode
+	context     *CommandContext
 }
 
 // NewCmdLine 创建新的命令行接口
@@ -53,18 +54,23 @@ func NewCmdLine(config *Config) *CmdLine {
 	// 设置配置的根模式
 	config.RootMode = rootMode
 
+	// 创建命令树
+	commandTree := NewCommandTree()
+
 	// 创建命令上下文
 	context := &CommandContext{
 		CurrentMode: rootMode,
 		Path:        []string{},
 		Variables:   make(map[string]string),
+		commandTree: commandTree,
 	}
 
 	return &CmdLine{
-		config:   config,
-		commands: make(map[string]CommandInfo),
-		rootMode: rootMode,
-		context:  context,
+		config:      config,
+		commands:    make(map[string]CommandInfo),
+		commandTree: commandTree,
+		rootMode:    rootMode,
+		context:     context,
 	}
 }
 
@@ -73,7 +79,14 @@ func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandl
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// 向后兼容：添加到平面命令存储
 	c.rootMode.AddCommand(name, description, handler)
+
+	// 新功能：添加到命令树
+	err := c.commandTree.AddCommand(name, description, handler)
+	if err != nil {
+		fmt.Printf("Warning: Failed to add command to tree: %v\n", err)
+	}
 }
 
 // RegisterModeCommand 注册命令到指定模式
@@ -156,8 +169,16 @@ func (c *CmdLine) Start() error {
 	// 注册内置命令（在锁外执行，避免死锁）
 	c.registerBuiltinCommands()
 	fmt.Printf("registered commands: %v\n", c.commands)
+
+	// 打印命令树结构
+	if c.commandTree != nil {
+		fmt.Printf("\n=== Command Tree Structure ===\n")
+		fmt.Printf("%s\n", c.commandTree.PrintTree())
+		fmt.Printf("=== End of Command Tree ===\n\n")
+	}
+
 	// 创建telnet服务器
-	c.server = NewTelnetServer(c.config, c.commands)
+	c.server = NewTelnetServerWithContext(c.config, c.context)
 	fmt.Printf("Telnet server created, starting...\n")
 
 	// 启动服务器
@@ -199,10 +220,6 @@ func (c *CmdLine) registerBuiltinCommands() {
 	c.RegisterCommand("help", "Show this help message", c.helpHandler)
 	c.RegisterCommand("?", "Show this help message", c.helpHandler)
 	fmt.Printf("Registered help commands\n")
-
-	// set命令
-	c.RegisterCommand("set", "Set configuration parameters", c.setHandler)
-	fmt.Printf("Registered set command\n")
 
 	// exit/quit命令
 	c.RegisterCommand("exit", "Exit the session", c.exitHandler)
