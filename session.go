@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -114,7 +115,8 @@ func (s *Session) Handle(ctx context.Context) error {
 			return nil
 		}
 		if err != nil {
-			return err
+			// 参数验证错误等非致命错误，只记录日志，不关闭连接
+			log.Printf("Command execution error: %v", err)
 		}
 	}
 }
@@ -394,6 +396,12 @@ func (s *Session) processCommand(cmd string) error {
 			// 使用命令树匹配成功，执行对应的处理函数
 			// 参数部分为匹配路径之后的所有部分
 			args := parts[len(matchedPath):]
+
+			// 验证参数数量是否正确
+			if err := s.validateCommandParameters(node, matchedPath, args); err != nil {
+				return err
+			}
+
 			writer := bufio.NewWriter(s.conn)
 			err := node.Handler(args, writer)
 			writer.Flush()
@@ -407,6 +415,51 @@ func (s *Session) processCommand(cmd string) error {
 	// 命令树匹配失败，显示错误信息
 	s.writerWrite(fmt.Sprintf("Unknown command: %s\r\n", strings.Join(parts, " ")))
 	s.writerWrite("Type 'help' for available commands\r\n")
+	return nil
+}
+
+// validateCommandParameters 验证命令参数数量是否正确
+func (s *Session) validateCommandParameters(node *CommandNode, matchedPath []string, args []string) error {
+	// 计算命令需要的参数数量
+	requiredParams := 0
+	optionalParams := 0
+
+	// 从匹配的节点开始，遍历到叶子节点，统计参数数量
+	current := node
+	for current != nil {
+		if current.Type != NodeTypeCommand {
+			// 参数节点
+			if current.IsRequired {
+				requiredParams++
+			} else {
+				optionalParams++
+			}
+		}
+		// 移动到下一个节点（如果有子节点）
+		if len(current.Children) > 0 {
+			// 取第一个子节点继续遍历
+			for _, child := range current.Children {
+				current = child
+				break
+			}
+		} else {
+			current = nil
+		}
+	}
+
+	// 验证参数数量
+	if len(args) < requiredParams {
+		s.writerWrite(fmt.Sprintf("Error: Too few arguments for command '%s'\r\n", strings.Join(matchedPath, " ")))
+		s.writerWrite(fmt.Sprintf("Expected at least %d arguments, got %d\r\n", requiredParams, len(args)))
+		return fmt.Errorf("insufficient arguments")
+	}
+
+	if len(args) > requiredParams+optionalParams {
+		s.writerWrite(fmt.Sprintf("Error: Too many arguments for command '%s'\r\n", strings.Join(matchedPath, " ")))
+		s.writerWrite(fmt.Sprintf("Expected at most %d arguments, got %d\r\n", requiredParams+optionalParams, len(args)))
+		return fmt.Errorf("too many arguments")
+	}
+
 	return nil
 }
 

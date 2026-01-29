@@ -28,12 +28,15 @@ func main() {
 	cmdline.RegisterCommand("show running-config", "Show running system information", showHandler)
 	cmdline.RegisterCommand("show config", "Show running system information", showHandler)
 	cmdline.RegisterCommand("ping IP", "Send echo messages", pingHandler)
-	cmdline.RegisterCommand("clear", "Reset functions", clearHandler)
+	cmdline.RegisterCommand("clear test1", "Reset functions", clearHandler)
+	cmdline.RegisterCommand("clear test2", "Reset functions", clearHandler)
 	cmdline.RegisterCommand("debug", "Debugging functions", debugHandler)
 	cmdline.RegisterCommand("set debug <1-10>", "Debugging functions", setValueHandler)
+	cmdline.RegisterCommand("set debug2 <1-10> (on|off)", "Debugging functions", setValueHandler)
 	cmdline.RegisterCommand("set debug info STRING", "Debugging functions", setValueHandler)
 	cmdline.RegisterCommand("set name STRING", "Debugging functions", setValueHandler)
 	cmdline.RegisterCommand("set filter-switch (on|off)", "Debugging functions", setValueHandler)
+	cmdline.RegisterCommand("set test [STRRING]", "Debugging functions", setValueHandler)
 
 	// 创建配置模式
 	cmdline.CreateMode("configure", "global configuration")
@@ -43,7 +46,12 @@ func main() {
 	cmdline.RegisterModeCommand("configure", "router", "Enable a routing process", routerHandler)
 	cmdline.RegisterModeCommand("configure", "hostname", "Set system's network name", hostnameHandler)
 	cmdline.RegisterModeCommand("configure", "banner", "Define a login banner", bannerHandler)
-
+	cmdline.RegisterModeCommand("configure", "set debug <1-10>", "Debugging functions", setValueHandler)
+	cmdline.RegisterModeCommand("configure", "set debug2 <1-10> (on|off)", "Debugging functions", setValueHandler)
+	cmdline.RegisterModeCommand("configure", "set debug info STRING", "Debugging functions", setValueHandler)
+	cmdline.RegisterModeCommand("configure", "set name STRING", "Debugging functions", setValueHandler)
+	cmdline.RegisterModeCommand("configure", "set filter-switch (on|off)", "Debugging functions", setValueHandler)
+	cmdline.RegisterModeCommand("configure", "set test [STRRING]", "Debugging functions", setValueHandler)
 	// 创建接口配置模式
 	cmdline.CreateMode("interface", "interface configuration")
 
