@@ -172,72 +172,10 @@ func (s *Session) readLine() (string, error) {
 					continue
 				}
 			case 0x3F: // ? - 显示命令提示
-				// 立即处理?键，显示当前可用的命令选项
 				currentInput := buffer.String()
-
-				// 分析输入，按空格拆分
-				inputParts := strings.Fields(currentInput)
-
-				// 首先尝试使用命令树进行智能提示（如果可用）
-				if s.context != nil && s.context.commandTree != nil {
-					node := s.context.commandTree.Root
-
-					// 遍历到当前层级
-					for i := 0; i < len(inputParts); i++ {
-						if child, exists := node.Children[inputParts[i]]; exists {
-							node = child
-						} else {
-							// 找不到匹配节点，使用默认提示
-							node = nil
-							break
-						}
-					}
-
-					if node != nil {
-						// 显示当前节点的所有子节点（包括参数节点）
-						var suggestions []string
-						for name := range node.Children {
-							suggestions = append(suggestions, name)
-						}
-
-						if len(suggestions) > 0 {
-							s.showCompletions(suggestions)
-							s.redrawLine(currentInput)
-							continue
-						}
-					}
-				}
-
-				// 向后兼容：使用旧的补全逻辑
-				if len(inputParts) == 0 {
-					// 空输入，显示所有一级命令
-					completions := s.completer.Complete("")
-					if len(completions) > 0 {
-						s.showCompletions(completions)
-						s.redrawLine(currentInput)
-					}
-				} else {
-					// 获取下一级补全选项
-					nextLevelCompletions := s.completer.GetNextLevelCompletions(currentInput)
-					if len(nextLevelCompletions) > 0 {
-						s.showCompletions(nextLevelCompletions)
-						s.redrawLine(currentInput)
-					} else {
-						// 没有下一级选项，显示当前可用的完整命令
-						completions := s.completer.GetCommandSuggestions(currentInput)
-						if len(completions) > 0 {
-							s.showCompletions(completions)
-							s.redrawLine(currentInput)
-						} else {
-							// 没有可用命令，显示提示信息
-							s.writerWrite("\r\nNo commands available\r\n")
-							s.redrawLine(currentInput)
-						}
-					}
-				}
-
-				// 继续等待用户输入
+				s.showCommandHelp(currentInput)
 				continue
+
 			case 0x0D, 0x0A: // Enter
 				s.writerWrite("\r\n")
 				s.flushWriter()
@@ -348,14 +286,14 @@ func (s *Session) processCommand(cmd string) error {
 		}
 	}
 
-	// 如果在当前视图的命令树中找不到命令，且当前不是根视图，尝试在根视图的命令树中查找视图切换命令
+	// 如果在当前视图的命令树中找不到命令，且当前不是根视图，尝试在根视图的命令树中查找命令
 	if s.context != nil && s.context.CurrentMode != nil && s.context.CurrentMode.Parent != nil {
 		rootMode := s.context.getRootMode()
 		if rootMode.commandTree != nil {
 			node, matchedPath, err := rootMode.commandTree.FindCommand(parts)
-			if err == nil && node != nil && node.Type == NodeTypeModeSwitch {
+			if err == nil && node != nil {
 				// 处理视图切换命令
-				if len(parts) == len(matchedPath) {
+				if node.Type == NodeTypeModeSwitch && len(parts) == len(matchedPath) {
 					modeName := node.ModeName
 					if subMode, exists := rootMode.Children[modeName]; exists {
 						s.context.ChangeMode(subMode)
@@ -364,12 +302,27 @@ func (s *Session) processCommand(cmd string) error {
 						return nil
 					}
 				}
+
+				// 处理普通命令（如quit、exit等）
+				if node.Handler != nil {
+					args := parts[len(matchedPath):]
+					if err := s.validateCommandParameters(node, matchedPath, args); err != nil {
+						return err
+					}
+
+					writer := bufio.NewWriter(s.conn)
+					err := node.Handler(args, writer)
+					writer.Flush()
+
+					s.updateCommands()
+					return err
+				}
 			}
 		}
 	}
 
 	s.writerWrite(fmt.Sprintf("Unknown command: %s\r\n", strings.Join(parts, " ")))
-	s.writerWrite("Type 'help' for available commands\r\n")
+	s.writerWrite("Type '?' for available commands\r\n")
 	return nil
 }
 
@@ -482,11 +435,10 @@ func (s *Session) handleTabCompletion(buffer *strings.Builder) bool {
 	inputParts := strings.Fields(currentInput)
 
 	if len(inputParts) == 0 {
-		completions := s.completer.GetRootCommands()
-		if len(completions) > 0 {
-			s.showCompletions(completions)
-			s.flushWriter()
-			s.redrawLine("")
+		suggestions := s.completer.GetCommandTreeSuggestions(currentInput)
+		if len(suggestions) > 0 {
+			s.showCompletions(suggestions)
+			s.redrawLine(currentInput)
 		}
 		return false
 	}
@@ -515,6 +467,48 @@ func (s *Session) handleTabCompletion(buffer *strings.Builder) bool {
 	}
 
 	return true
+}
+
+// showCommandHelp 显示命令帮助（处理?键）
+func (s *Session) showCommandHelp(currentInput string) {
+	// 分析输入，按空格拆分
+	inputParts := strings.Fields(currentInput)
+
+	// 首先尝试使用命令树进行智能提示（如果可用）
+	suggestions := s.completer.GetCommandTreeSuggestions(currentInput)
+	if len(suggestions) > 0 {
+		s.showCompletions(suggestions)
+		s.redrawLine(currentInput)
+		return
+	}
+
+	// 向后兼容：使用旧的补全逻辑
+	if len(inputParts) == 0 {
+		// 空输入，显示所有一级命令
+		completions := s.completer.Complete("")
+		if len(completions) > 0 {
+			s.showCompletions(completions)
+			s.redrawLine(currentInput)
+		}
+	} else {
+		// 获取下一级补全选项
+		nextLevelCompletions := s.completer.GetNextLevelCompletions(currentInput)
+		if len(nextLevelCompletions) > 0 {
+			s.showCompletions(nextLevelCompletions)
+			s.redrawLine(currentInput)
+		} else {
+			// 没有下一级选项，显示当前可用的完整命令
+			completions := s.completer.GetCommandTreeSuggestions(currentInput)
+			if len(completions) > 0 {
+				s.showCompletions(completions)
+				s.redrawLine(currentInput)
+			} else {
+				// 没有可用命令，显示提示信息
+				s.writerWrite("\r\nNo commands available\r\n")
+				s.redrawLine(currentInput)
+			}
+		}
+	}
 }
 
 // Close 关闭会话

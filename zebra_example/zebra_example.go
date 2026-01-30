@@ -57,16 +57,15 @@ func main() {
 		mode, name, desc string
 		handler          func([]string, io.Writer) error
 	}{
-		{"configure", "interface", "Select an interface to configure", interfaceHandler},
-		{"configure", "router", "Enable a routing process", routerHandler},
-		{"configure", "hostname", "Set system's network name", hostnameHandler},
-		{"configure", "banner", "Define a login banner", bannerHandler},
-		{"configure", "set debug <1-10>", "Debugging functions", setValueHandler},
-		{"configure", "set debug2 <1-10> (on|off)", "Debugging functions", setValueHandler},
-		{"configure", "set debug info STRING", "Debugging functions", setValueHandler},
-		{"configure", "set name STRING", "Debugging functions", setValueHandler},
-		{"configure", "set filter-switch (on|off)", "Debugging functions", setValueHandler},
-		{"configure", "set test [STRRING]", "Debugging functions", setValueHandler},
+		{"configure", "router PROTOCOL", "Enable a routing process", routerHandler},
+		{"configure", "hostname HOSTNAME", "Set system's network name", hostnameHandler},
+		{"configure", "banner BANNER", "Define a login banner", bannerHandler},
+		{"configure", "set debug3 <1-10>", "Debugging functions", setValueHandler},
+		{"configure", "set debug4 <1-10> (on|off)", "Debugging functions", setValueHandler},
+		{"configure", "set debug info2 STRING", "Debugging functions", setValueHandler},
+		{"configure", "set name2 STRING", "Debugging functions", setValueHandler},
+		{"configure", "set filter-switch3 (on|off)", "Debugging functions", setValueHandler},
+		{"configure", "set tes3t [STRRING]", "Debugging functions", setValueHandler},
 	}
 
 	for _, cmd := range configCommands {
@@ -80,10 +79,10 @@ func main() {
 		mode, name, desc string
 		handler          func([]string, io.Writer) error
 	}{
-		{"interface", "ip", "Interface Internet Protocol config commands", ipHandler},
-		{"interface", "description", "Interface specific description", descriptionHandler},
+		{"interface", "ip IPADDR MASK", "Interface Internet Protocol config commands", ipHandler},
+		{"interface", "description TEXT", "Interface specific description", descriptionHandler},
 		{"interface", "shutdown", "Shutdown the selected interface", shutdownHandler},
-		{"interface", "no", "Negate a command or set its defaults", noHandler},
+		{"interface", "no COMMAND", "Negate a command or set its defaults", noHandler},
 	}
 
 	for _, cmd := range interfaceCommands {

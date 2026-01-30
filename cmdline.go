@@ -44,7 +44,7 @@ func NewCmdLine(config *Config) *CmdLine {
 		config = &Config{
 			Prompt:     "cmdline> ",
 			Port:       2323,
-			WelcomeMsg: "Welcome to Command Line Interface!\r\nType 'help' for available commands.\r\n",
+			WelcomeMsg: "Welcome to Command Line Interface!\r\nType '?' for available commands.\r\n",
 			MaxHistory: 100,
 		}
 	}
@@ -244,8 +244,14 @@ func (c *CmdLine) helpHandler(args []string, writer io.Writer) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// 使用命令上下文获取当前模式下的所有可用命令
-	commands := c.context.GetAvailableCommands()
+	// 使用当前会话的上下文获取可用命令（如果可用）
+	var commands map[string]CommandInfo
+	if c.context != nil && c.context.CurrentMode != nil {
+		commands = c.context.GetAvailableCommands()
+	} else {
+		// 向后兼容：使用全局上下文
+		commands = c.commands
+	}
 
 	writer.Write([]byte("Available commands:\r\n"))
 	for name, cmd := range commands {

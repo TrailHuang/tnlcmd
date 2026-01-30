@@ -52,6 +52,7 @@ type CommandTree struct {
 }
 
 var ModeCommands = make(map[string]*CommandNode) // 全局视图切换命令存储
+
 // NewCommandTree 创建新的命令树
 func NewCommandTree() *CommandTree {
 	return &CommandTree{
@@ -71,6 +72,15 @@ func NewCommandNode(name string, nodeType CommandNodeType, description string) *
 		Description: description,
 		Children:    make(map[string]*CommandNode),
 	}
+}
+
+// GetModeCommandKeys 获取ModeCommands中的所有key，按数组返回
+func (t *CommandTree) GetModeCommandKeys() []string {
+	keys := make([]string, 0, len(ModeCommands))
+	for key := range ModeCommands {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 // AddCommand 添加命令到命令树

@@ -18,7 +18,7 @@ func main() {
 	config := &tnlcmd.Config{
 		Prompt:     "myapp> ",
 		Port:       2324,
-		WelcomeMsg: "Welcome to My Application!\r\nType 'help' for available commands.\r\n",
+		WelcomeMsg: "Welcome to My Application!\r\nType '?' for available commands.\r\n",
 		MaxHistory: 50,
 	}
 
