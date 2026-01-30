@@ -37,7 +37,7 @@ func NewSession(conn net.Conn, config *Config, commands map[string]CommandInfo) 
 	}
 
 	s.history = NewCommandHistory(config.MaxHistory)
-	s.completer = NewCommandCompleter()
+	s.completer = NewCommandCompleterWithContext(s.context)
 
 	// 启用telnet字符模式
 	s.enableTelnetCharacterMode()
@@ -72,10 +72,8 @@ func (s *Session) updateCommands() {
 	if s.context != nil {
 		s.commands = s.context.GetAvailableCommands()
 		s.prompt = s.context.CurrentMode.Prompt
-		// 更新补全器的命令树
-		if s.context.commandTree != nil {
-			s.completer.UpdateCommandTree(s.context.commandTree)
-		}
+		// 更新补全器的上下文（不再需要更新命令树，因为补全器使用上下文）
+		s.completer.context = s.context
 	} else {
 		s.commands = make(map[string]CommandInfo)
 		s.prompt = s.config.Prompt
@@ -339,9 +337,25 @@ func (s *Session) processCommand(cmd string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.context != nil && s.context.commandTree != nil {
-		node, matchedPath, err := s.context.commandTree.FindCommand(parts)
+	// 首先检查当前视图的命令树
+	if s.context != nil && s.context.CurrentMode != nil && s.context.CurrentMode.commandTree != nil {
+		node, matchedPath, err := s.context.CurrentMode.commandTree.FindCommand(parts)
 		if err == nil && node != nil {
+			// 处理视图切换命令
+			if node.Type == NodeTypeModeSwitch {
+				if s.context != nil && len(parts) == len(matchedPath) {
+					// 查找要切换到的视图
+					modeName := node.ModeName
+					rootMode := s.context.getRootMode()
+					if subMode, exists := rootMode.Children[modeName]; exists {
+						s.context.ChangeMode(subMode)
+						s.writerWrite(fmt.Sprintf("Entering %s mode\r\n", subMode.Description))
+						return nil
+						s.updateCommands()
+					}
+				}
+			}
+
 			if node.Handler != nil {
 				args := parts[len(matchedPath):]
 				if err := s.validateCommandParameters(node, matchedPath, args); err != nil {
@@ -363,6 +377,26 @@ func (s *Session) processCommand(cmd string) error {
 					s.writerWrite(fmt.Sprintf("Entering %s mode\r\n", subMode.Description))
 					s.updateCommands()
 					return nil
+				}
+			}
+		}
+	}
+
+	// 如果在当前视图的命令树中找不到命令，且当前不是根视图，尝试在根视图的命令树中查找视图切换命令
+	if s.context != nil && s.context.CurrentMode != nil && s.context.CurrentMode.Parent != nil {
+		rootMode := s.context.getRootMode()
+		if rootMode.commandTree != nil {
+			node, matchedPath, err := rootMode.commandTree.FindCommand(parts)
+			if err == nil && node != nil && node.Type == NodeTypeModeSwitch {
+				// 处理视图切换命令
+				if len(parts) == len(matchedPath) {
+					modeName := node.ModeName
+					if subMode, exists := rootMode.Children[modeName]; exists {
+						s.context.ChangeMode(subMode)
+						s.writerWrite(fmt.Sprintf("Entering %s mode\r\n", subMode.Description))
+						s.updateCommands()
+						return nil
+					}
 				}
 			}
 		}

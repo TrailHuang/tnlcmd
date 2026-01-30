@@ -14,6 +14,7 @@ type CommandMode struct {
 	Commands    map[string]CommandInfo
 	Parent      *CommandMode
 	Children    map[string]*CommandMode
+	commandTree *CommandTree // 当前视图的独立命令树
 }
 
 // CommandContext 命令上下文
@@ -44,6 +45,7 @@ func NewCommandMode(name, prompt, description string) *CommandMode {
 		Description: description,
 		Commands:    make(map[string]CommandInfo),
 		Children:    make(map[string]*CommandMode),
+		commandTree: NewCommandTree(), // 为每个视图创建独立的命令树
 	}
 }
 
@@ -54,19 +56,17 @@ func (m *CommandMode) AddCommand(name, description string, handler CommandHandle
 		Description: description,
 		Handler:     handler,
 	}
+
+	// 同时添加到当前视图的独立命令树
+	if m.commandTree != nil {
+		_ = m.commandTree.AddCommand(name, description, handler)
+	}
 }
 
 // AddSubMode 添加子模式
 func (m *CommandMode) AddSubMode(subMode *CommandMode) {
 	subMode.Parent = m
 	m.Children[subMode.Name] = subMode
-
-	// 自动将子模式名称作为切换命令添加到父模式
-	m.AddCommand(subMode.Name, fmt.Sprintf("Enter %s configuration mode", subMode.Description), func(args []string, writer io.Writer) error {
-		// 这个处理函数将在命令上下文中被替换为实际的模式切换处理函数
-		writer.Write([]byte(fmt.Sprintf("Entering %s mode\r\n", subMode.Description)))
-		return nil
-	})
 }
 
 // GetFullPath 获取完整模式路径
@@ -94,6 +94,12 @@ func (c *CommandContext) ChangeMode(mode *CommandMode) {
 	} else {
 		// 子视图（只保留当前视图名称）
 		c.Path = []string{mode.Name}
+	}
+	// 打印命令树结构
+	if c.CurrentMode.commandTree != nil {
+		fmt.Printf("\n=== Command Tree Structure ===\n")
+		fmt.Printf("%s\n", c.CurrentMode.commandTree.PrintTree())
+		fmt.Printf("=== End of Command Tree ===\n\n")
 	}
 }
 

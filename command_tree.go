@@ -13,11 +13,12 @@ import (
 type CommandNodeType int
 
 const (
-	NodeTypeCommand  CommandNodeType = iota // 命令节点
-	NodeTypeOptional                        // 可选参数节点 []
-	NodeTypeEnum                            // 枚举参数节点 ()
-	NodeTypeRange                           // 数值范围节点 <>
-	NodeTypeString                          // 字符串参数节点（大写字母）
+	NodeTypeCommand    CommandNodeType = iota // 命令节点
+	NodeTypeOptional                          // 可选参数节点 []
+	NodeTypeEnum                              // 枚举参数节点 ()
+	NodeTypeRange                             // 数值范围节点 <>
+	NodeTypeString                            // 字符串参数节点（大写字母）
+	NodeTypeModeSwitch                        // 视图切换命令节点
 )
 
 // CommandNode 命令树节点
@@ -34,6 +35,9 @@ type CommandNode struct {
 	RangeMin   int      // 范围最小值
 	RangeMax   int      // 范围最大值
 	IsRequired bool     // 是否必需参数
+
+	// 视图切换特定字段
+	ModeName string // 要切换到的视图名称
 }
 
 // PathNode 路径节点，包含节点名称和类型信息
@@ -47,6 +51,7 @@ type CommandTree struct {
 	Root *CommandNode
 }
 
+var ModeCommands = make(map[string]*CommandNode) // 全局视图切换命令存储
 // NewCommandTree 创建新的命令树
 func NewCommandTree() *CommandTree {
 	return &CommandTree{
@@ -90,6 +95,24 @@ func (t *CommandTree) AddCommand(command string, description string, handler Com
 	// 设置叶子节点的处理函数和描述（叶子节点包含完整的命令信息）
 	current.Handler = handler
 	current.Description = description
+
+	return nil
+}
+
+// AddModeCommand 添加视图切换命令到命令树
+func (t *CommandTree) AddModeCommand(modeName string, description string) error {
+	// 创建视图切换命令节点
+	node := NewCommandNode(modeName, NodeTypeModeSwitch, description)
+	node.ModeName = modeName
+	node.IsRequired = true
+	node.Type = NodeTypeModeSwitch
+
+	// 添加到根节点
+	t.Root.Children[modeName] = node
+	node.Parent = t.Root
+
+	// 同时添加到全局视图切换命令存储
+	ModeCommands[modeName] = node
 
 	return nil
 }
@@ -181,6 +204,16 @@ func isAllUppercase(s string) bool {
 
 // FindCommand 查找匹配的命令
 func (t *CommandTree) FindCommand(args []string) (*CommandNode, []string, error) {
+	// 如果只有一个参数，优先在全局视图切换命令中查找
+	if len(args) == 1 {
+		modeName := args[0]
+		if modeNode, exists := ModeCommands[modeName]; exists {
+			// 找到匹配的视图切换命令
+			return modeNode, []string{modeName}, nil
+		}
+	}
+
+	// 否则使用正常的命令查找逻辑
 	return t.Root.findCommand(args, nil)
 }
 
@@ -205,7 +238,7 @@ func (n *CommandNode) findCommand(args []string, path []string) (*CommandNode, [
 
 	// 首先尝试精确匹配命令节点
 	for _, child := range n.Children {
-		if child.Type == NodeTypeCommand && child.Name == currentArg {
+		if (child.Type == NodeTypeCommand || child.Type == NodeTypeModeSwitch) && child.Name == currentArg {
 			return child.findCommand(remainingArgs, append(path, currentArg))
 		}
 	}
@@ -274,7 +307,7 @@ func (n *CommandNode) GetCompletions(args []string) []string {
 	// 查找匹配的子节点
 	for _, child := range n.Children {
 		switch child.Type {
-		case NodeTypeCommand:
+		case NodeTypeCommand, NodeTypeModeSwitch:
 			if strings.HasPrefix(child.Name, currentArg) {
 				if len(remainingArgs) == 0 {
 					completions = append(completions, child.Name)

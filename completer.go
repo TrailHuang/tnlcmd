@@ -6,7 +6,8 @@ import (
 
 // CommandCompleter 命令补全器
 type CommandCompleter struct {
-	commandTree *CommandTree // 树形命令存储
+	commandTree *CommandTree    // 树形命令存储（向后兼容）
+	context     *CommandContext // 命令上下文，用于访问当前视图的独立命令树
 }
 
 // NewCommandCompleter 创建新的命令补全器
@@ -21,6 +22,13 @@ func NewCommandCompleterWithTree(tree *CommandTree) *CommandCompleter {
 	}
 }
 
+// NewCommandCompleterWithContext 创建带上下文的补全器
+func NewCommandCompleterWithContext(context *CommandContext) *CommandCompleter {
+	return &CommandCompleter{
+		context: context,
+	}
+}
+
 // UpdateCommandTree 更新命令树
 func (c *CommandCompleter) UpdateCommandTree(tree *CommandTree) {
 	c.commandTree = tree
@@ -30,7 +38,68 @@ func (c *CommandCompleter) UpdateCommandTree(tree *CommandTree) {
 func (c *CommandCompleter) Complete(input string) []string {
 	var completions []string
 
-	// 如果使用命令树，优先使用树形匹配
+	// 优先使用当前视图的独立命令树
+	if c.context != nil && c.context.CurrentMode != nil && c.context.CurrentMode.commandTree != nil {
+		inputParts := strings.Fields(input)
+		node := c.context.CurrentMode.commandTree.Root
+
+		// 遍历到当前层级
+		for i := 0; i < len(inputParts)-1; i++ {
+			if child, exists := node.Children[inputParts[i]]; exists {
+				node = child
+			} else {
+				// 找不到匹配节点，返回空
+				return completions
+			}
+		}
+
+		// 获取当前节点的补全选项
+		if len(inputParts) > 0 {
+			currentInput := inputParts[len(inputParts)-1]
+			var matchingChildren []string
+
+			// 收集所有匹配的子节点（包括视图切换命令）
+			for name, child := range node.Children {
+				// 补全命令节点和视图切换命令节点
+				if (child.Type == NodeTypeCommand || child.Type == NodeTypeModeSwitch) && strings.HasPrefix(name, currentInput) {
+					matchingChildren = append(matchingChildren, name)
+				}
+			}
+
+			// 智能补全逻辑
+			if len(matchingChildren) == 1 {
+				completions = matchingChildren
+			} else if len(matchingChildren) > 1 {
+				// 检查是否存在多个不同的前缀模式
+				allSamePrefix := true
+				firstChild := matchingChildren[0]
+
+				for i := 1; i < len(matchingChildren); i++ {
+					if !strings.HasPrefix(matchingChildren[i], firstChild) {
+						allSamePrefix = false
+						break
+					}
+				}
+
+				if allSamePrefix {
+					completions = []string{firstChild}
+				} else {
+					completions = matchingChildren
+				}
+			}
+		} else {
+			// 空输入，返回所有一级命令（包括视图切换命令）
+			for name, child := range node.Children {
+				if child.Type == NodeTypeCommand || child.Type == NodeTypeModeSwitch {
+					completions = append(completions, name)
+				}
+			}
+		}
+
+		return completions
+	}
+
+	// 向后兼容：如果使用全局命令树
 	if c.commandTree != nil {
 		inputParts := strings.Fields(input)
 		node := c.commandTree.Root
