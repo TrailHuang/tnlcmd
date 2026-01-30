@@ -27,41 +27,68 @@ func main() {
 	cmdline.SetConfig("welcome", "Welcome to  CLI!\r\nType '?' for available commands.\r\n")
 
 	// 注册根模式命令（特权EXEC模式）
-	cmdline.RegisterCommand("show running-config", "Show running system information", showHandler)
-	cmdline.RegisterCommand("show config", "Show running system information", showHandler)
-	cmdline.RegisterCommand("ping IP", "Send echo messages", pingHandler)
-	cmdline.RegisterCommand("clear test1", "Reset functions", clearHandler)
-	cmdline.RegisterCommand("clear test2", "Reset functions", clearHandler)
-	cmdline.RegisterCommand("debug", "Debugging functions", debugHandler)
-	cmdline.RegisterCommand("set debug <1-10>", "Debugging functions", setValueHandler)
-	cmdline.RegisterCommand("set debug2 <1-10> (on|off)", "Debugging functions", setValueHandler)
-	cmdline.RegisterCommand("set debug info STRING", "Debugging functions", setValueHandler)
-	cmdline.RegisterCommand("set name STRING", "Debugging functions", setValueHandler)
-	cmdline.RegisterCommand("set filter-switch (on|off)", "Debugging functions", setValueHandler)
-	cmdline.RegisterCommand("set test [STRRING]", "Debugging functions", setValueHandler)
+	rootCommands := []struct {
+		name, desc string
+		handler    func([]string, io.Writer) error
+	}{
+		{"show running-config", "Show running system information", showHandler},
+		{"show config", "Show running system information", showHandler},
+		{"ping IP", "Send echo messages", pingHandler},
+		{"clear test1", "Reset functions", clearHandler},
+		{"clear test2", "Reset functions", clearHandler},
+		{"debug", "Debugging functions", debugHandler},
+		{"set debug <1-10>", "Debugging functions", setValueHandler},
+		{"set debug2 <1-10> (on|off)", "Debugging functions", setValueHandler},
+		{"set debug info STRING", "Debugging functions", setValueHandler},
+		{"set name STRING", "Debugging functions", setValueHandler},
+		{"set filter-switch (on|off)", "Debugging functions", setValueHandler},
+		{"set test [STRRING]", "Debugging functions", setValueHandler},
+	}
+
+	for _, cmd := range rootCommands {
+		cmdline.RegisterCommand(cmd.name, cmd.desc, cmd.handler)
+	}
 
 	// 创建配置模式
 	cmdline.CreateMode("configure", "global configuration")
 
-	// 注册配置模式命令（configure 命令应该作为模式切换命令自动处理）
-	cmdline.RegisterModeCommand("configure", "interface", "Select an interface to configure", interfaceHandler)
-	cmdline.RegisterModeCommand("configure", "router", "Enable a routing process", routerHandler)
-	cmdline.RegisterModeCommand("configure", "hostname", "Set system's network name", hostnameHandler)
-	cmdline.RegisterModeCommand("configure", "banner", "Define a login banner", bannerHandler)
-	cmdline.RegisterModeCommand("configure", "set debug <1-10>", "Debugging functions", setValueHandler)
-	cmdline.RegisterModeCommand("configure", "set debug2 <1-10> (on|off)", "Debugging functions", setValueHandler)
-	cmdline.RegisterModeCommand("configure", "set debug info STRING", "Debugging functions", setValueHandler)
-	cmdline.RegisterModeCommand("configure", "set name STRING", "Debugging functions", setValueHandler)
-	cmdline.RegisterModeCommand("configure", "set filter-switch (on|off)", "Debugging functions", setValueHandler)
-	cmdline.RegisterModeCommand("configure", "set test [STRRING]", "Debugging functions", setValueHandler)
+	// 注册配置模式命令
+	configCommands := []struct {
+		mode, name, desc string
+		handler          func([]string, io.Writer) error
+	}{
+		{"configure", "interface", "Select an interface to configure", interfaceHandler},
+		{"configure", "router", "Enable a routing process", routerHandler},
+		{"configure", "hostname", "Set system's network name", hostnameHandler},
+		{"configure", "banner", "Define a login banner", bannerHandler},
+		{"configure", "set debug <1-10>", "Debugging functions", setValueHandler},
+		{"configure", "set debug2 <1-10> (on|off)", "Debugging functions", setValueHandler},
+		{"configure", "set debug info STRING", "Debugging functions", setValueHandler},
+		{"configure", "set name STRING", "Debugging functions", setValueHandler},
+		{"configure", "set filter-switch (on|off)", "Debugging functions", setValueHandler},
+		{"configure", "set test [STRRING]", "Debugging functions", setValueHandler},
+	}
+
+	for _, cmd := range configCommands {
+		cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler)
+	}
 	// 创建接口配置模式
 	cmdline.CreateMode("interface", "interface configuration")
 
 	// 注册接口配置模式命令
-	cmdline.RegisterModeCommand("interface", "ip", "Interface Internet Protocol config commands", ipHandler)
-	cmdline.RegisterModeCommand("interface", "description", "Interface specific description", descriptionHandler)
-	cmdline.RegisterModeCommand("interface", "shutdown", "Shutdown the selected interface", shutdownHandler)
-	cmdline.RegisterModeCommand("interface", "no", "Negate a command or set its defaults", noHandler)
+	interfaceCommands := []struct {
+		mode, name, desc string
+		handler          func([]string, io.Writer) error
+	}{
+		{"interface", "ip", "Interface Internet Protocol config commands", ipHandler},
+		{"interface", "description", "Interface specific description", descriptionHandler},
+		{"interface", "shutdown", "Shutdown the selected interface", shutdownHandler},
+		{"interface", "no", "Negate a command or set its defaults", noHandler},
+	}
+
+	for _, cmd := range interfaceCommands {
+		cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler)
+	}
 
 	// 启动命令行服务
 	err := cmdline.Start()
@@ -100,16 +127,11 @@ func showHandler(args []string, writer io.Writer) error {
 
 	switch args[0] {
 	case "version":
-		writer.Write([]byte("RouterOS Version 7.8\r\n"))
-		writer.Write([]byte("Build: 2024-01-20\r\n"))
+		writer.Write([]byte("RouterOS Version 7.8\r\nBuild: 2024-01-20\r\n"))
 	case "interfaces":
-		writer.Write([]byte("Interface Status:\r\n"))
-		writer.Write([]byte("  eth0: UP, 1000Mbps\r\n"))
-		writer.Write([]byte("  eth1: DOWN, 100Mbps\r\n"))
+		writer.Write([]byte("Interface Status:\r\n  eth0: UP, 1000Mbps\r\n  eth1: DOWN, 100Mbps\r\n"))
 	case "ip", "route":
-		writer.Write([]byte("IP Routing Table:\r\n"))
-		writer.Write([]byte("  C 192.168.1.0/24 is directly connected, eth0\r\n"))
-		writer.Write([]byte("  S 0.0.0.0/0 [1/0] via 192.168.1.1\r\n"))
+		writer.Write([]byte("IP Routing Table:\r\n  C 192.168.1.0/24 is directly connected, eth0\r\n  S 0.0.0.0/0 [1/0] via 192.168.1.1\r\n"))
 	default:
 		writer.Write([]byte("Unknown show command\r\n"))
 	}
@@ -133,11 +155,14 @@ func pingHandler(args []string, writer io.Writer) error {
 	if len(args) > 0 {
 		target = args[0]
 	}
-	writer.Write([]byte(fmt.Sprintf("PING %s: 64 data bytes\r\n", target)))
-	writer.Write([]byte("64 bytes from 8.8.8.8: icmp_seq=0 ttl=57 time=25.3 ms\r\n"))
-	writer.Write([]byte("64 bytes from 8.8.8.8: icmp_seq=1 ttl=57 time=24.8 ms\r\n"))
-	writer.Write([]byte("--- 8.8.8.8 ping statistics ---\r\n"))
-	writer.Write([]byte("2 packets transmitted, 2 packets received, 0% packet loss\r\n"))
+
+	output := fmt.Sprintf("PING %s: 64 data bytes\r\n"+
+		"64 bytes from 8.8.8.8: icmp_seq=0 ttl=57 time=25.3 ms\r\n"+
+		"64 bytes from 8.8.8.8: icmp_seq=1 ttl=57 time=24.8 ms\r\n"+
+		"--- 8.8.8.8 ping statistics ---\r\n"+
+		"2 packets transmitted, 2 packets received, 0%% packet loss\r\n", target)
+
+	writer.Write([]byte(output))
 	return nil
 }
 

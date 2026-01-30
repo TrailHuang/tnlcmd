@@ -26,14 +26,23 @@ func main() {
 	cmdline := tnlcmd.NewCmdLine(config)
 
 	// 注册自定义命令
-	cmdline.RegisterCommand("echo", "Echo arguments", echoHandler)
-	cmdline.RegisterCommand("time", "Show current time", timeHandler)
-	cmdline.RegisterCommand("status", "Show application status", statusHandler)
-	cmdline.RegisterCommand("show test1", "Show test1 information", showTest1Handler)
-	cmdline.RegisterCommand("show test2", "Show test2 information", showTest2Handler)
-	cmdline.RegisterCommand("show time", "Show detailed time information", showTimeHandler)
-	cmdline.RegisterCommand("show date", "Show current date", showDateHandler)
-	cmdline.RegisterCommand("set test3 <1-100>", "Set test3 parameter", setTest3Handler)
+	commands := []struct {
+		name, desc string
+		handler    func([]string, io.Writer) error
+	}{
+		{"echo", "Echo arguments", echoHandler},
+		{"time", "Show current time", timeHandler},
+		{"status", "Show application status", statusHandler},
+		{"show test1", "Show test1 information", showTest1Handler},
+		{"show test2", "Show test2 information", showTest2Handler},
+		{"show time", "Show detailed time information", showTimeHandler},
+		{"show date", "Show current date", showDateHandler},
+		{"set test3 <1-100>", "Set test3 parameter", setTest3Handler},
+	}
+
+	for _, cmd := range commands {
+		cmdline.RegisterCommand(cmd.name, cmd.desc, cmd.handler)
+	}
 
 	// 启动命令行服务
 	err := cmdline.Start()
