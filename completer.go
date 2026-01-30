@@ -1,6 +1,7 @@
 package tnlcmd
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -293,8 +294,20 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 		if child, exists := node.Children[inputParts[i]]; exists {
 			node = child
 		} else {
-			// 找不到匹配节点，返回空建议
-			return suggestions
+			// 检查是否是参数节点匹配
+			paramMatched := false
+			for _, child := range node.Children {
+				// 如果是参数节点，检查参数类型是否匹配
+				if child.Type != NodeTypeCommand && isParameterMatch(child, inputParts[i]) {
+					node = child
+					paramMatched = true
+					break
+				}
+			}
+			if !paramMatched {
+				// 找不到匹配节点，返回空建议
+				return suggestions
+			}
 		}
 	}
 
@@ -311,4 +324,66 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 		}
 	}
 	return suggestions
+}
+
+// isParameterMatch 检查输入是否匹配参数节点
+func isParameterMatch(node *CommandNode, input string) bool {
+	// 简单的参数匹配逻辑
+	// 在实际实现中，应该根据参数类型进行更复杂的验证
+
+	// 检查常见的参数类型模式
+	switch node.Type {
+	case NodeTypeRange: // 范围参数，如 <1-10>
+		if isNumber(input) {
+			return true
+		}
+	case NodeTypeEnum: // 枚举参数，如 (on|off)
+		return true // 暂时返回true，实际应该验证枚举值
+	case NodeTypeString:
+		if isString(input) {
+			return true
+		}
+	default:
+		// 默认情况下，如果参数名包含输入，则认为匹配
+		return false
+	}
+	return false
+}
+
+func isNumber(str string) bool {
+	_, err := strconv.Atoi(str)
+	return err == nil
+}
+
+func isString(str string) bool {
+	return len(str) > 0
+}
+
+// isValidIPAddress 检查是否为有效的IP地址
+func isValidIPAddress(ip string) bool {
+	// 简单的IP地址验证
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, part := range parts {
+		if num, err := strconv.Atoi(part); err != nil || num < 0 || num > 255 {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidIPv6Address(ip string) bool {
+	// 简单的IPv6地址验证
+	parts := strings.Split(ip, ":")
+	if len(parts) != 8 {
+		return false
+	}
+	for _, part := range parts {
+		if num, err := strconv.ParseUint(part, 16, 16); err != nil || num < 0 || num > 0xFFFF {
+			return false
+		}
+	}
+	return true
 }

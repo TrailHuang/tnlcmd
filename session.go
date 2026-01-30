@@ -286,41 +286,6 @@ func (s *Session) processCommand(cmd string) error {
 		}
 	}
 
-	// 如果在当前视图的命令树中找不到命令，且当前不是根视图，尝试在根视图的命令树中查找命令
-	if s.context != nil && s.context.CurrentMode != nil && s.context.CurrentMode.Parent != nil {
-		rootMode := s.context.getRootMode()
-		if rootMode.commandTree != nil {
-			node, matchedPath, err := rootMode.commandTree.FindCommand(parts)
-			if err == nil && node != nil {
-				// 处理视图切换命令
-				if node.Type == NodeTypeModeSwitch && len(parts) == len(matchedPath) {
-					modeName := node.ModeName
-					if subMode, exists := rootMode.Children[modeName]; exists {
-						s.context.ChangeMode(subMode)
-						s.writerWrite(fmt.Sprintf("Entering %s mode\r\n", subMode.Description))
-						s.updateCommands()
-						return nil
-					}
-				}
-
-				// 处理普通命令（如quit、exit等）
-				if node.Handler != nil {
-					args := parts[len(matchedPath):]
-					if err := s.validateCommandParameters(node, matchedPath, args); err != nil {
-						return err
-					}
-
-					writer := bufio.NewWriter(s.conn)
-					err := node.Handler(args, writer)
-					writer.Flush()
-
-					s.updateCommands()
-					return err
-				}
-			}
-		}
-	}
-
 	s.writerWrite(fmt.Sprintf("Unknown command: %s\r\n", strings.Join(parts, " ")))
 	s.writerWrite("Type '?' for available commands\r\n")
 	return nil
@@ -474,39 +439,24 @@ func (s *Session) showCommandHelp(currentInput string) {
 	// 分析输入，按空格拆分
 	inputParts := strings.Fields(currentInput)
 
-	// 首先尝试使用命令树进行智能提示（如果可用）
-	suggestions := s.completer.GetCommandTreeSuggestions(currentInput)
-	if len(suggestions) > 0 {
-		s.showCompletions(suggestions)
-		s.redrawLine(currentInput)
-		return
-	}
-
-	// 向后兼容：使用旧的补全逻辑
+	// 使用命令树进行智能提示
 	if len(inputParts) == 0 {
 		// 空输入，显示所有一级命令
-		completions := s.completer.Complete("")
+		completions := s.completer.GetCommandTreeSuggestions("")
 		if len(completions) > 0 {
 			s.showCompletions(completions)
 			s.redrawLine(currentInput)
 		}
 	} else {
 		// 获取下一级补全选项
-		nextLevelCompletions := s.completer.GetNextLevelCompletions(currentInput)
+		nextLevelCompletions := s.completer.GetCommandTreeSuggestions(currentInput)
 		if len(nextLevelCompletions) > 0 {
 			s.showCompletions(nextLevelCompletions)
 			s.redrawLine(currentInput)
 		} else {
-			// 没有下一级选项，显示当前可用的完整命令
-			completions := s.completer.GetCommandTreeSuggestions(currentInput)
-			if len(completions) > 0 {
-				s.showCompletions(completions)
-				s.redrawLine(currentInput)
-			} else {
-				// 没有可用命令，显示提示信息
-				s.writerWrite("\r\nNo commands available\r\n")
-				s.redrawLine(currentInput)
-			}
+			// 没有可用命令，显示提示信息
+			s.writerWrite("\r\nNo commands available\r\n")
+			s.redrawLine(currentInput)
 		}
 	}
 }
