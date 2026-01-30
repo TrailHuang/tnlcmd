@@ -339,30 +339,35 @@ func (s *Session) processCommand(cmd string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// 使用命令树进行智能匹配
 	if s.context != nil && s.context.commandTree != nil {
 		node, matchedPath, err := s.context.commandTree.FindCommand(parts)
-		if err == nil && node != nil && node.Handler != nil {
-			// 使用命令树匹配成功，执行对应的处理函数
-			// 参数部分为匹配路径之后的所有部分
-			args := parts[len(matchedPath):]
+		if err == nil && node != nil {
+			if node.Handler != nil {
+				args := parts[len(matchedPath):]
+				if err := s.validateCommandParameters(node, matchedPath, args); err != nil {
+					return err
+				}
 
-			// 验证参数数量是否正确
-			if err := s.validateCommandParameters(node, matchedPath, args); err != nil {
+				writer := bufio.NewWriter(s.conn)
+				err := node.Handler(args, writer)
+				writer.Flush()
+
+				s.updateCommands()
 				return err
 			}
 
-			writer := bufio.NewWriter(s.conn)
-			err := node.Handler(args, writer)
-			writer.Flush()
-
-			// 命令执行后，检查是否需要更新命令列表
-			s.updateCommands()
-			return err
+			if s.context != nil && len(parts) == len(matchedPath) {
+				modeName := parts[len(parts)-1]
+				if subMode, exists := s.context.CurrentMode.Children[modeName]; exists {
+					s.context.ChangeMode(subMode)
+					s.writerWrite(fmt.Sprintf("Entering %s mode\r\n", subMode.Description))
+					s.updateCommands()
+					return nil
+				}
+			}
 		}
 	}
 
-	// 命令树匹配失败，显示错误信息
 	s.writerWrite(fmt.Sprintf("Unknown command: %s\r\n", strings.Join(parts, " ")))
 	s.writerWrite("Type 'help' for available commands\r\n")
 	return nil

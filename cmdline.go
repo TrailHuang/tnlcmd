@@ -96,6 +96,7 @@ func (c *CmdLine) RegisterModeCommand(modePath string, name, description string,
 
 	// 查找或创建模式路径
 	currentMode := c.rootMode
+	var fullCommandPath string
 	if modePath != "" {
 		modeName := modePath
 		if subMode, exists := currentMode.Children[modeName]; exists {
@@ -106,9 +107,15 @@ func (c *CmdLine) RegisterModeCommand(modePath string, name, description string,
 			currentMode.AddSubMode(subMode)
 			currentMode = subMode
 		}
+		fullCommandPath = modePath + " " + name
+	} else {
+		fullCommandPath = name
 	}
 
 	currentMode.AddCommand(name, description, handler)
+
+	// 同时添加到命令树，实现 Tab 补全和命令执行
+	_ = c.commandTree.AddCommand(fullCommandPath, description, handler)
 }
 
 // CreateMode 创建新的命令模式
@@ -129,6 +136,9 @@ func (c *CmdLine) CreateMode(modePath string, description string) {
 			subMode = NewCommandMode(modeName, prompt, description)
 			currentMode.AddSubMode(subMode)
 			currentMode = subMode
+
+			// 同时添加到命令树，实现 Tab 补全和命令执行
+			_ = c.commandTree.AddCommand(modeName, fmt.Sprintf("Enter %s configuration mode", description), nil)
 		}
 	}
 }
