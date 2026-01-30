@@ -243,7 +243,7 @@ func (s *Session) processCommand(cmd string) error {
 
 	// 首先检查当前视图的命令树
 	if s.context != nil && s.context.CurrentMode != nil && s.context.CurrentMode.commandTree != nil {
-		node, matchedPath, err := s.context.CurrentMode.commandTree.FindCommand(parts)
+		node, matchedPath, args, err := s.context.CurrentMode.commandTree.FindCommand(parts)
 		if err == nil && node != nil {
 			// 处理视图切换命令
 			if node.Type == NodeTypeModeSwitch {
@@ -261,7 +261,7 @@ func (s *Session) processCommand(cmd string) error {
 			}
 
 			if node.Handler != nil {
-				args := parts[len(matchedPath):]
+				//args := parts[len(matchedPath):]
 				if err := s.validateCommandParameters(node, matchedPath, args); err != nil {
 					return err
 				}
@@ -297,7 +297,7 @@ func (s *Session) validateCommandParameters(node *CommandNode, matchedPath []str
 	requiredParams := 0
 	optionalParams := 0
 
-	// 从匹配的节点开始，遍历到叶子节点，统计参数数量
+	// 从当前节点往根节点方向回溯，统计路径上的参数
 	current := node
 	for current != nil {
 		if current.Type != NodeTypeCommand {
@@ -308,16 +308,8 @@ func (s *Session) validateCommandParameters(node *CommandNode, matchedPath []str
 				optionalParams++
 			}
 		}
-		// 移动到下一个节点（如果有子节点）
-		if len(current.Children) > 0 {
-			// 取第一个子节点继续遍历
-			for _, child := range current.Children {
-				current = child
-				break
-			}
-		} else {
-			current = nil
-		}
+		// 移动到父节点
+		current = current.Parent
 	}
 
 	// 验证参数数量

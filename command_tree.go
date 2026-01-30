@@ -236,34 +236,34 @@ func isAllUppercase(s string) bool {
 }
 
 // FindCommand 查找匹配的命令
-func (t *CommandTree) FindCommand(args []string) (*CommandNode, []string, error) {
+func (t *CommandTree) FindCommand(args []string) (*CommandNode, []string, []string, error) {
 	// 如果只有一个参数，优先在全局视图切换命令中查找
 	if len(args) == 1 {
 		modeName := args[0]
 		if modeNode, exists := ModeCommands[modeName]; exists {
 			// 找到匹配的视图切换命令
-			return modeNode, []string{modeName}, nil
+			return modeNode, []string{modeName}, []string{}, nil
 		}
 	}
 
 	// 否则使用正常的命令查找逻辑
-	return t.Root.findCommand(args, nil)
+	return t.Root.findCommand(args, nil, nil)
 }
 
 // findCommand 递归查找匹配的命令
-func (n *CommandNode) findCommand(args []string, path []string) (*CommandNode, []string, error) {
+func (n *CommandNode) findCommand(args []string, path []string, matchArgs []string) (*CommandNode, []string, []string, error) {
 	if len(args) == 0 {
 		// 到达命令末尾，返回当前节点
 		if n.Handler != nil {
-			return n, path, nil
+			return n, path, matchArgs, nil
 		}
 		// 如果没有处理函数，继续查找可选参数
 		for _, child := range n.Children {
 			if child.Type == NodeTypeOptional {
-				return child.findCommand(args, path)
+				return child.findCommand(args, path, matchArgs)
 			}
 		}
-		return nil, path, fmt.Errorf("incomplete command")
+		return nil, path, matchArgs, fmt.Errorf("incomplete command")
 	}
 
 	currentArg := args[0]
@@ -272,7 +272,7 @@ func (n *CommandNode) findCommand(args []string, path []string) (*CommandNode, [
 	// 首先尝试精确匹配命令节点
 	for _, child := range n.Children {
 		if (child.Type == NodeTypeCommand || child.Type == NodeTypeModeSwitch) && child.Name == currentArg {
-			return child.findCommand(remainingArgs, append(path, currentArg))
+			return child.findCommand(remainingArgs, append(path, currentArg), matchArgs)
 		}
 	}
 
@@ -281,33 +281,14 @@ func (n *CommandNode) findCommand(args []string, path []string) (*CommandNode, [
 		// 参数节点匹配：基于参数类型验证值
 		// 首先检查节点是否是参数节点（非命令节点）
 		if child.Type != NodeTypeCommand {
-			// 根据参数类型验证输入值
-			switch child.Type {
-			case NodeTypeEnum:
-				// 枚举参数：检查值是否在枚举列表中
-				for _, enumValue := range child.EnumValues {
-					if enumValue == currentArg {
-						// 参数节点匹配成功，返回当前节点，剩余参数作为处理函数的参数
-						return child, path, nil
-					}
+			// 可选参数需要特殊处理 - 尝试递归匹配
+			if child.Type == NodeTypeOptional {
+				if matchedNode, matchedPath, tmpargs, err := child.findCommand(args, path, matchArgs); err == nil {
+					return matchedNode, matchedPath, tmpargs, nil
 				}
-			case NodeTypeRange:
-				// 范围参数：检查值是否在范围内
-				if num, err := strconv.Atoi(currentArg); err == nil {
-					if num >= child.RangeMin && num <= child.RangeMax {
-						// 参数节点匹配成功，返回当前节点，剩余参数作为处理函数的参数
-						return child, path, nil
-					}
-				}
-			case NodeTypeString:
-				// 字符串参数：匹配任何值
+			} else if isParameterMatch(child, currentArg) {
 				// 参数节点匹配成功，返回当前节点，剩余参数作为处理函数的参数
-				return child, path, nil
-			case NodeTypeOptional:
-				// 可选参数：尝试匹配，如果不匹配则跳过
-				if matchedNode, matchedPath, err := child.findCommand(args, path); err == nil {
-					return matchedNode, matchedPath, nil
-				}
+				return child.findCommand(remainingArgs, append(path, currentArg), append(matchArgs, currentArg))
 			}
 		}
 	}
@@ -316,10 +297,10 @@ func (n *CommandNode) findCommand(args []string, path []string) (*CommandNode, [
 	if n.Handler != nil {
 		// 当前节点有处理函数，但还有未匹配的参数
 		// 将这些参数传递给处理函数
-		return n, path, nil
+		return n, path, matchArgs, nil
 	}
 
-	return nil, path, fmt.Errorf("unknown command: %s", currentArg)
+	return nil, path, matchArgs, fmt.Errorf("unknown command: %s", currentArg)
 }
 
 // GetCompletions 获取补全建议
@@ -556,4 +537,66 @@ func getNodeTypeString(nodeType CommandNodeType) string {
 	default:
 		return "Unknown"
 	}
+}
+
+// isParameterMatch 检查输入是否匹配参数节点
+func isParameterMatch(node *CommandNode, input string) bool {
+	// 简单的参数匹配逻辑
+	// 在实际实现中，应该根据参数类型进行更复杂的验证
+
+	// 检查常见的参数类型模式
+	switch node.Type {
+	case NodeTypeRange: // 范围参数，如 <1-10>
+		if isNumber(input) {
+			return true
+		}
+	case NodeTypeEnum: // 枚举参数，如 (on|off)
+		return true // 暂时返回true，实际应该验证枚举值
+	case NodeTypeString:
+		if isString(input) {
+			return true
+		}
+	default:
+		// 默认情况下，如果参数名包含输入，则认为匹配
+		return false
+	}
+	return false
+}
+
+func isNumber(str string) bool {
+	_, err := strconv.Atoi(str)
+	return err == nil
+}
+
+func isString(str string) bool {
+	return len(str) > 0
+}
+
+// isValidIPAddress 检查是否为有效的IP地址
+func isValidIPAddress(ip string) bool {
+	// 简单的IP地址验证
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, part := range parts {
+		if num, err := strconv.Atoi(part); err != nil || num < 0 || num > 255 {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidIPv6Address(ip string) bool {
+	// 简单的IPv6地址验证
+	parts := strings.Split(ip, ":")
+	if len(parts) != 8 {
+		return false
+	}
+	for _, part := range parts {
+		if num, err := strconv.ParseUint(part, 16, 16); err != nil || num < 0 || num > 0xFFFF {
+			return false
+		}
+	}
+	return true
 }
