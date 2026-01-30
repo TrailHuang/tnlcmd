@@ -23,6 +23,8 @@ func main() {
 
 	// 创建命令行接口
 	cmdline := tnlcmd.NewCmdLine(config)
+	cmdline.SetConfig("prompt", "test")
+	cmdline.SetConfig("welcome", "Welcome to  CLI!\r\nType '?' for available commands.\r\n")
 
 	// 注册根模式命令（特权EXEC模式）
 	cmdline.RegisterCommand("show running-config", "Show running system information", showHandler)

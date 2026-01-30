@@ -3,6 +3,7 @@ package tnlcmd
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"sync"
 )
 
@@ -153,7 +154,7 @@ func (c *CmdLine) SetConfig(key, value string) error {
 		c.config.WelcomeMsg = value
 	case "maxhistory":
 		// 这里可以添加类型转换逻辑
-		return nil
+		c.config.MaxHistory, _ = strconv.Atoi(value)
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}
