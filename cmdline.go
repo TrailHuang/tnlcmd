@@ -90,31 +90,36 @@ func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandl
 	}
 }
 
+// findOrCreateMode 查找或创建模式路径
+func (c *CmdLine) findOrCreateMode(modePath string, description string) *CommandMode {
+	currentMode := c.rootMode
+	if modePath == "" {
+		return currentMode
+	}
+
+	modeName := modePath
+	if subMode, exists := currentMode.Children[modeName]; exists {
+		return subMode
+	}
+
+	// 创建新的子模式
+	prompt := modeName
+	subMode := NewCommandMode(modeName, prompt, description)
+	currentMode.AddSubMode(subMode)
+
+	// 同时添加到命令树，使用专门的视图切换命令方法
+	_ = c.commandTree.AddModeCommand(modeName, fmt.Sprintf("Enter %s configuration mode", description))
+
+	return subMode
+}
+
 // RegisterModeCommand 注册命令到指定模式
 func (c *CmdLine) RegisterModeCommand(modePath string, name, description string, handler CommandHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// 查找或创建模式路径
-	currentMode := c.rootMode
-	if modePath != "" {
-		modeName := modePath
-		if subMode, exists := currentMode.Children[modeName]; exists {
-			currentMode = subMode
-		} else {
-			// 创建新的子模式
-			subMode = NewCommandMode(modeName, modeName, fmt.Sprintf("%s configuration", modeName))
-			currentMode.AddSubMode(subMode)
-			currentMode = subMode
-
-			// 同时添加到命令树，使用专门的视图切换命令方法
-			_ = c.commandTree.AddModeCommand(modeName, fmt.Sprintf("Enter %s configuration mode", description))
-		}
-	}
-
+	currentMode := c.findOrCreateMode(modePath, fmt.Sprintf("%s configuration", modePath))
 	currentMode.AddCommand(name, description, handler)
-
-	// 不再添加到全局命令树，每个视图有自己的独立命令树
 }
 
 // CreateMode 创建新的命令模式
@@ -122,24 +127,7 @@ func (c *CmdLine) CreateMode(modePath string, description string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	currentMode := c.rootMode
-	if modePath != "" {
-		modeName := modePath
-		if subMode, exists := currentMode.Children[modeName]; exists {
-			currentMode = subMode
-		} else {
-			// 创建新的子模式
-			// 子视图Prompt只包含子模式名称，以'#'结束
-			prompt := modeName
-
-			subMode = NewCommandMode(modeName, prompt, description)
-			currentMode.AddSubMode(subMode)
-			currentMode = subMode
-
-			// 同时添加到命令树，使用专门的视图切换命令方法
-			_ = c.commandTree.AddModeCommand(modeName, fmt.Sprintf("Enter %s configuration mode", description))
-		}
-	}
+	c.findOrCreateMode(modePath, description)
 }
 
 // SetConfig 动态设置配置参数
@@ -225,15 +213,31 @@ func (c *CmdLine) Stop() error {
 // registerBuiltinCommands 注册内置命令
 func (c *CmdLine) registerBuiltinCommands() {
 	fmt.Printf("Starting to register builtin commands...\n")
-	// help命令
-	c.RegisterCommand("help", "Show this help message", c.helpHandler)
-	c.RegisterCommand("?", "Show this help message", c.helpHandler)
-	fmt.Printf("Registered help commands\n")
 
-	// exit/quit命令
-	c.RegisterCommand("exit", "Exit the session", c.exitHandler)
-	c.RegisterCommand("quit", "Exit the session", c.exitHandler)
-	fmt.Printf("Registered exit/quit commands\n")
+	// 在所有模式下注册内置命令
+	builtinCommands := []struct {
+		name, desc string
+		handler    CommandHandler
+	}{
+		{"help", "Show this help message", c.helpHandler},
+		{"?", "Show this help message", c.helpHandler},
+		{"exit", "Exit the session", c.exitHandler},
+		{"quit", "Exit the session", c.exitHandler},
+	}
+
+	// 注册到根模式（向后兼容）
+	for _, cmd := range builtinCommands {
+		c.rootMode.AddCommand(cmd.name, cmd.desc, cmd.handler)
+	}
+
+	// 注册到全局命令树
+	for _, cmd := range builtinCommands {
+		err := c.commandTree.AddCommand(cmd.name, cmd.desc, cmd.handler)
+		if err != nil {
+			fmt.Printf("Warning: Failed to add command %s to tree: %v\n", cmd.name, err)
+		}
+	}
+
 	fmt.Printf("Builtin commands registration completed\n")
 }
 

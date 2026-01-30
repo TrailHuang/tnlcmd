@@ -138,55 +138,78 @@ func (t *CommandTree) parseCommandString(command string) ([]*CommandNode, error)
 
 // parseCommandPart 解析命令部分，支持参数语法
 func (t *CommandTree) parseCommandPart(part string) (*CommandNode, error) {
-	// 可选参数语法 [parameter]
-	if strings.HasPrefix(part, "[") && strings.HasSuffix(part, "]") {
-		param := strings.Trim(part, "[]")
-		node := NewCommandNode(param, NodeTypeOptional, "Optional parameter")
-		node.IsRequired = false
-		return node, nil
+	// 定义参数类型解析器
+	parsers := []struct {
+		prefix, suffix string
+		nodeType       CommandNodeType
+		description    string
+		isRequired     bool
+		parser         func(string) (*CommandNode, bool)
+	}{
+		{"[", "]", NodeTypeOptional, "Optional parameter", false, t.parseOptionalParam},
+		{"(", ")", NodeTypeEnum, "Enum parameter", true, t.parseEnumParam},
+		{"<", ">", NodeTypeRange, "Range parameter", true, t.parseRangeParam},
 	}
 
-	// 枚举参数语法 (value1|value2|value3)
-	if strings.HasPrefix(part, "(") && strings.HasSuffix(part, ")") {
-		param := strings.Trim(part, "()")
-		values := strings.Split(param, "|")
-		node := NewCommandNode(part, NodeTypeEnum, "Enum parameter")
-		node.EnumValues = values
-		node.IsRequired = true
-		return node, nil
-	}
-
-	// 数值范围语法 <min-max>
-	if strings.HasPrefix(part, "<") && strings.HasSuffix(part, ">") {
-		param := strings.Trim(part, "<>")
-		if strings.Contains(param, "-") {
-			rangeParts := strings.Split(param, "-")
-			if len(rangeParts) == 2 {
-				min, err1 := strconv.Atoi(rangeParts[0])
-				max, err2 := strconv.Atoi(rangeParts[1])
-				if err1 == nil && err2 == nil {
-					node := NewCommandNode(part, NodeTypeRange, "Range parameter")
-					node.RangeMin = min
-					node.RangeMax = max
-					node.IsRequired = true
-					return node, nil
-				}
+	// 尝试匹配参数类型
+	for _, parser := range parsers {
+		if strings.HasPrefix(part, parser.prefix) && strings.HasSuffix(part, parser.suffix) {
+			if node, ok := parser.parser(part); ok {
+				return node, nil
 			}
 		}
-		// 如果范围解析失败，当作普通参数处理
 	}
 
 	// 字符串参数（全大写字母）
 	if isAllUppercase(part) {
-		node := NewCommandNode(part, NodeTypeString, "String parameter")
-		node.IsRequired = true
-		return node, nil
+		return NewCommandNode(part, NodeTypeString, "String parameter"), nil
 	}
 
 	// 普通命令
-	node := NewCommandNode(part, NodeTypeCommand, "Command")
+	return NewCommandNode(part, NodeTypeCommand, "Command"), nil
+}
+
+// parseOptionalParam 解析可选参数
+func (t *CommandTree) parseOptionalParam(part string) (*CommandNode, bool) {
+	param := strings.Trim(part, "[]")
+	node := NewCommandNode(param, NodeTypeOptional, "Optional parameter")
+	node.IsRequired = false
+	return node, true
+}
+
+// parseEnumParam 解析枚举参数
+func (t *CommandTree) parseEnumParam(part string) (*CommandNode, bool) {
+	param := strings.Trim(part, "()")
+	values := strings.Split(param, "|")
+	node := NewCommandNode(part, NodeTypeEnum, "Enum parameter")
+	node.EnumValues = values
 	node.IsRequired = true
-	return node, nil
+	return node, true
+}
+
+// parseRangeParam 解析数值范围参数
+func (t *CommandTree) parseRangeParam(part string) (*CommandNode, bool) {
+	param := strings.Trim(part, "<>")
+	if !strings.Contains(param, "-") {
+		return nil, false
+	}
+
+	rangeParts := strings.Split(param, "-")
+	if len(rangeParts) != 2 {
+		return nil, false
+	}
+
+	min, err1 := strconv.Atoi(rangeParts[0])
+	max, err2 := strconv.Atoi(rangeParts[1])
+	if err1 != nil || err2 != nil {
+		return nil, false
+	}
+
+	node := NewCommandNode(part, NodeTypeRange, "Range parameter")
+	node.RangeMin = min
+	node.RangeMax = max
+	node.IsRequired = true
+	return node, true
 }
 
 // isAllUppercase 检查字符串是否全大写字母

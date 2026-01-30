@@ -168,43 +168,9 @@ func (s *Session) readLine() (string, error) {
 					s.redrawLine(buffer.String())
 				}
 			case 0x09: // Tab - 命令补全
-				currentInput := buffer.String()
-				inputParts := strings.Fields(currentInput)
-
-				if len(inputParts) == 0 {
-					completions := s.completer.GetRootCommands()
-					if len(completions) > 0 {
-						s.showCompletions(completions)
-						s.flushWriter()
-						s.redrawLine("")
-					}
+				if !s.handleTabCompletion(&buffer) {
 					continue
 				}
-
-				nextLevelCompletions := s.completer.GetNextLevelCompletions(currentInput)
-
-				switch len(nextLevelCompletions) {
-				case 0:
-					paramCompletions := s.completer.GetParameterCompletions(currentInput)
-					if len(paramCompletions) > 0 {
-						s.showCompletions(paramCompletions)
-						s.flushWriter()
-						s.redrawLine(buffer.String())
-					} else {
-						s.writerWrite("\x07")
-						s.flushWriter()
-					}
-				case 1:
-					buffer.Reset()
-					buffer.WriteString(nextLevelCompletions[0])
-					s.redrawLine(buffer.String())
-				default:
-					s.showCompletions(nextLevelCompletions)
-					s.flushWriter()
-					s.redrawLine(buffer.String())
-				}
-
-				continue
 			case 0x3F: // ? - 显示命令提示
 				// 立即处理?键，显示当前可用的命令选项
 				currentInput := buffer.String()
@@ -350,8 +316,8 @@ func (s *Session) processCommand(cmd string) error {
 					if subMode, exists := rootMode.Children[modeName]; exists {
 						s.context.ChangeMode(subMode)
 						s.writerWrite(fmt.Sprintf("Entering %s mode\r\n", subMode.Description))
-						return nil
 						s.updateCommands()
+						return nil
 					}
 				}
 			}
@@ -399,6 +365,20 @@ func (s *Session) processCommand(cmd string) error {
 					}
 				}
 			}
+		}
+	}
+
+	// 如果在命令树中找不到命令，尝试在平面命令存储中查找（向后兼容）
+	if len(parts) == 1 {
+		cmdName := parts[0]
+		if cmdInfo, exists := s.commands[cmdName]; exists {
+			// 执行平面命令存储中的命令
+			writer := bufio.NewWriter(s.conn)
+			err := cmdInfo.Handler(nil, writer)
+			writer.Flush()
+
+			s.updateCommands()
+			return err
 		}
 	}
 
@@ -508,6 +488,47 @@ func (s *Session) IsStale() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return time.Since(s.lastActive) > 10*time.Minute
+}
+
+// handleTabCompletion 处理Tab键补全
+func (s *Session) handleTabCompletion(buffer *strings.Builder) bool {
+	currentInput := buffer.String()
+	inputParts := strings.Fields(currentInput)
+
+	if len(inputParts) == 0 {
+		completions := s.completer.GetRootCommands()
+		if len(completions) > 0 {
+			s.showCompletions(completions)
+			s.flushWriter()
+			s.redrawLine("")
+		}
+		return false
+	}
+
+	nextLevelCompletions := s.completer.GetNextLevelCompletions(currentInput)
+
+	switch len(nextLevelCompletions) {
+	case 0:
+		paramCompletions := s.completer.GetParameterCompletions(currentInput)
+		if len(paramCompletions) > 0 {
+			s.showCompletions(paramCompletions)
+			s.flushWriter()
+			s.redrawLine(buffer.String())
+		} else {
+			s.writerWrite("\x07")
+			s.flushWriter()
+		}
+	case 1:
+		buffer.Reset()
+		buffer.WriteString(nextLevelCompletions[0])
+		s.redrawLine(buffer.String())
+	default:
+		s.showCompletions(nextLevelCompletions)
+		s.flushWriter()
+		s.redrawLine(buffer.String())
+	}
+
+	return true
 }
 
 // Close 关闭会话
