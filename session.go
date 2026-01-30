@@ -368,20 +368,6 @@ func (s *Session) processCommand(cmd string) error {
 		}
 	}
 
-	// 如果在命令树中找不到命令，尝试在平面命令存储中查找（向后兼容）
-	if len(parts) == 1 {
-		cmdName := parts[0]
-		if cmdInfo, exists := s.commands[cmdName]; exists {
-			// 执行平面命令存储中的命令
-			writer := bufio.NewWriter(s.conn)
-			err := cmdInfo.Handler(nil, writer)
-			writer.Flush()
-
-			s.updateCommands()
-			return err
-		}
-	}
-
 	s.writerWrite(fmt.Sprintf("Unknown command: %s\r\n", strings.Join(parts, " ")))
 	s.writerWrite("Type 'help' for available commands\r\n")
 	return nil

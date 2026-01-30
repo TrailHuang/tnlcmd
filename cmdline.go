@@ -219,8 +219,6 @@ func (c *CmdLine) registerBuiltinCommands() {
 		name, desc string
 		handler    CommandHandler
 	}{
-		{"help", "Show this help message", c.helpHandler},
-		{"?", "Show this help message", c.helpHandler},
 		{"exit", "Exit the session", c.exitHandler},
 		{"quit", "Exit the session", c.exitHandler},
 	}
