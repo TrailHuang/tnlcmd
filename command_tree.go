@@ -84,7 +84,7 @@ func (t *CommandTree) GetModeCommandKeys() []string {
 }
 
 // AddCommand 添加命令到命令树
-func (t *CommandTree) AddCommand(command string, description string, handler CommandHandler) error {
+func (t *CommandTree) AddCommand(command string, description string, handler CommandHandler, detailedDescription ...string) error {
 	// 解析完整的命令字符串，包括参数
 	nodes, err := t.parseCommandString(command)
 	if err != nil {
@@ -106,7 +106,48 @@ func (t *CommandTree) AddCommand(command string, description string, handler Com
 	current.Handler = handler
 	current.Description = description
 
+	// 处理多行详细描述
+	if len(detailedDescription) > 0 && detailedDescription[0] != "" {
+		// 将多行描述按\n分割，并保存到每个对应的命令节点
+		lines := strings.Split(detailedDescription[0], "\n")
+
+		// 从根节点开始，为路径上的每个节点设置对应的描述行
+		pathNodes := t.getCommandPathNodes(command)
+		for i, node := range pathNodes {
+			if i < len(lines) && lines[i] != "" {
+				node.Description = lines[i]
+			}
+		}
+	}
+
 	return nil
+}
+
+// getCommandPathNodes 获取命令路径上的所有节点
+func (t *CommandTree) getCommandPathNodes(command string) []*CommandNode {
+	var pathNodes []*CommandNode
+
+	// 解析命令字符串
+	nodes, err := t.parseCommandString(command)
+	if err != nil {
+		return pathNodes
+	}
+
+	// 从根节点开始遍历路径
+	current := t.Root
+	pathNodes = append(pathNodes, current)
+
+	for _, node := range nodes {
+		if existing, exists := current.Children[node.Name]; exists {
+			current = existing
+			pathNodes = append(pathNodes, current)
+		} else {
+			// 如果节点不存在，停止遍历
+			break
+		}
+	}
+
+	return pathNodes
 }
 
 // AddModeCommand 添加视图切换命令到命令树

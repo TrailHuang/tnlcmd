@@ -1,6 +1,7 @@
 package tnlcmd
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -310,15 +311,19 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 		}
 	}
 
-	// 显示当前节点的所有子节点（包括参数节点）
-	for name := range node.Children {
-		suggestions = append(suggestions, name)
+	// 显示当前节点的所有子节点（包括参数节点），返回命令和描述的组合
+	for name, child := range node.Children {
+		// 格式："命令名称（固定32宽度左对齐） - 描述"
+		suggestion := fmt.Sprintf("%-32s  %s", name, child.Description)
+		suggestions = append(suggestions, suggestion)
 	}
 	//将视图切换命令也添加到建议中
 	if len(inputParts) <= 1 {
 		for _, key := range c.context.CurrentMode.commandTree.GetModeCommandKeys() {
 			if strings.HasPrefix(key, input) {
-				suggestions = append(suggestions, key)
+				// 对于视图切换命令，使用默认描述
+				suggestion := fmt.Sprintf("%-32s  Switch to %s mode", key, key)
+				suggestions = append(suggestions, suggestion)
 			}
 		}
 	}

@@ -28,25 +28,30 @@ func main() {
 
 	// 注册根模式命令（特权EXEC模式）
 	rootCommands := []struct {
-		name, desc string
-		handler    func([]string, io.Writer) error
+		name, desc   string
+		detailedDesc string
+		handler      func([]string, io.Writer) error
 	}{
-		{"show running-config", "Show running system information", showHandler},
-		{"show config", "Show running system information", showHandler},
-		{"ping IP", "Send echo messages", pingHandler},
-		{"clear test1", "Reset functions", clearHandler},
-		{"clear test2", "Reset functions", clearHandler},
-		{"debug", "Debugging functions", debugHandler},
-		{"set debug <1-10>", "Debugging functions", setValueHandler},
-		{"set debug2 <1-10> (on|off)", "Debugging functions", setValueHandler},
-		{"set debug info STRING", "Debugging functions", setValueHandler},
-		{"set name STRING", "Debugging functions", setValueHandler},
-		{"set filter-switch (on|off)", "Debugging functions", setValueHandler},
-		{"set test [STRRING]", "Debugging functions", setValueHandler},
+		{"show running-config", "Show running system information", "show configuration\ndisplay running config", showHandler},
+		{"show config", "Show running system information", "show configuration\ndisplay system config", showHandler},
+		{"ping IP", "Send echo messages", "send echo\ntest connectivity", pingHandler},
+		{"clear test1", "Reset functions", "clear test\nreset test1", clearHandler},
+		{"clear test2", "Reset functions", "clear test\nreset test2", clearHandler},
+		{"debug", "Debugging functions", "debug mode\nenable debugging", debugHandler},
+		{"set debug <1-10>", "Debugging functions", "set debug level\nconfigure debug", setValueHandler},
+		{"set debug2 <1-10> (on|off)", "Debugging functions", "set debug2\nconfigure debug2", setValueHandler},
+		{"set debug info STRING", "Debugging functions", "set debug info\nconfigure debug info", setValueHandler},
+		{"set name STRING", "Debugging functions", "set name\nconfigure name", setValueHandler},
+		{"set filter-switch (on|off)", "Debugging functions", "set filter\nconfigure filter switch", setValueHandler},
+		{"set test [STRRING]", "Debugging functions", "set test\nconfigure test", setValueHandler},
 	}
 
 	for _, cmd := range rootCommands {
-		cmdline.RegisterCommand(cmd.name, cmd.desc, cmd.handler)
+		if cmd.detailedDesc != "" {
+			cmdline.RegisterCommand(cmd.name, cmd.desc, cmd.handler, cmd.detailedDesc)
+		} else {
+			cmdline.RegisterCommand(cmd.name, cmd.desc, cmd.handler)
+		}
 	}
 
 	// 创建配置模式
@@ -55,21 +60,26 @@ func main() {
 	// 注册配置模式命令
 	configCommands := []struct {
 		mode, name, desc string
+		detailedDesc     string
 		handler          func([]string, io.Writer) error
 	}{
-		{"configure", "router PROTOCOL", "Enable a routing process", routerHandler},
-		{"configure", "hostname HOSTNAME", "Set system's network name", hostnameHandler},
-		{"configure", "banner BANNER", "Define a login banner", bannerHandler},
-		{"configure", "set debug3 <1-10>", "Debugging functions", setValueHandler},
-		{"configure", "set debug4 <1-10> (on|off)", "Debugging functions", setValueHandler},
-		{"configure", "set debug info2 STRING", "Debugging functions", setValueHandler},
-		{"configure", "set name2 STRING", "Debugging functions", setValueHandler},
-		{"configure", "set filter-switch3 (on|off)", "Debugging functions", setValueHandler},
-		{"configure", "set tes3t [STRRING]", "Debugging functions", setValueHandler},
+		{"configure", "router PROTOCOL", "Enable a routing process", "enable routing\nconfigure routing protocol", routerHandler},
+		{"configure", "hostname HOSTNAME", "Set system's network name", "set hostname\nconfigure system hostname", hostnameHandler},
+		{"configure", "banner BANNER", "Define a login banner", "define banner\nconfigure login banner", bannerHandler},
+		{"configure", "set debug3 <1-10>", "Debugging functions", "", setValueHandler},
+		{"configure", "set debug4 <1-10> (on|off)", "Debugging functions", "", setValueHandler},
+		{"configure", "set debug info2 STRING", "Debugging functions", "", setValueHandler},
+		{"configure", "set name2 STRING", "Debugging functions", "", setValueHandler},
+		{"configure", "set filter-switch3 (on|off)", "Debugging functions", "", setValueHandler},
+		{"configure", "set tes3t [STRRING]", "Debugging functions", "", setValueHandler},
 	}
 
 	for _, cmd := range configCommands {
-		cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler)
+		if cmd.detailedDesc != "" {
+			cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler, cmd.detailedDesc)
+		} else {
+			cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler)
+		}
 	}
 	// 创建接口配置模式
 	cmdline.CreateMode("interface", "interface configuration")
@@ -77,16 +87,21 @@ func main() {
 	// 注册接口配置模式命令
 	interfaceCommands := []struct {
 		mode, name, desc string
+		detailedDesc     string
 		handler          func([]string, io.Writer) error
 	}{
-		{"interface", "ip IPADDR MASK", "Interface Internet Protocol config commands", ipHandler},
-		{"interface", "description TEXT", "Interface specific description", descriptionHandler},
-		{"interface", "shutdown", "Shutdown the selected interface", shutdownHandler},
-		{"interface", "no COMMAND", "Negate a command or set its defaults", noHandler},
+		{"interface", "ip IPADDR MASK", "Interface Internet Protocol config commands", "configure ip\nset interface ip address", ipHandler},
+		{"interface", "description TEXT", "Interface specific description", "set description\nconfigure interface description", descriptionHandler},
+		{"interface", "shutdown", "Shutdown the selected interface", "shutdown interface\ndisable interface", shutdownHandler},
+		{"interface", "no COMMAND", "Negate a command or set its defaults", "negate command\nundo configuration", noHandler},
 	}
 
 	for _, cmd := range interfaceCommands {
-		cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler)
+		if cmd.detailedDesc != "" {
+			cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler, cmd.detailedDesc)
+		} else {
+			cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler)
+		}
 	}
 
 	// 启动命令行服务

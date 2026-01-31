@@ -50,7 +50,7 @@ func NewCommandMode(name, prompt, description string) *CommandMode {
 }
 
 // AddCommand 添加命令到模式
-func (m *CommandMode) AddCommand(name, description string, handler CommandHandler) {
+func (m *CommandMode) AddCommand(name, description string, handler CommandHandler, detailedDescription ...string) {
 	m.Commands[name] = CommandInfo{
 		Name:        name,
 		Description: description,
@@ -59,7 +59,7 @@ func (m *CommandMode) AddCommand(name, description string, handler CommandHandle
 
 	// 同时添加到当前视图的独立命令树
 	if m.commandTree != nil {
-		_ = m.commandTree.AddCommand(name, description, handler)
+		_ = m.commandTree.AddCommand(name, description, handler, detailedDescription...)
 	}
 }
 

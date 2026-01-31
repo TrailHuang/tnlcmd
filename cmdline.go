@@ -76,7 +76,7 @@ func NewCmdLine(config *Config) *CmdLine {
 }
 
 // RegisterCommand 注册命令到根模式
-func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandler) {
+func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandler, detailedDescription ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -84,7 +84,7 @@ func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandl
 	c.rootMode.AddCommand(name, description, handler)
 
 	// 新功能：添加到命令树
-	err := c.commandTree.AddCommand(name, description, handler)
+	err := c.commandTree.AddCommand(name, description, handler, detailedDescription...)
 	if err != nil {
 		fmt.Printf("Warning: Failed to add command to tree: %v\n", err)
 	}
@@ -114,12 +114,12 @@ func (c *CmdLine) findOrCreateMode(modePath string, description string) *Command
 }
 
 // RegisterModeCommand 注册命令到指定模式
-func (c *CmdLine) RegisterModeCommand(modePath string, name, description string, handler CommandHandler) {
+func (c *CmdLine) RegisterModeCommand(modePath string, name, description string, handler CommandHandler, detailedDescription ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	currentMode := c.findOrCreateMode(modePath, fmt.Sprintf("%s configuration", modePath))
-	currentMode.AddCommand(name, description, handler)
+	currentMode.AddCommand(name, description, handler, detailedDescription...)
 }
 
 // CreateMode 创建新的命令模式
