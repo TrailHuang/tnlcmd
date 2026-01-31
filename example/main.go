@@ -16,7 +16,7 @@ import (
 func main() {
 	// 创建命令行接口配置
 	config := &tnlcmd.Config{
-		Prompt:     "myapp> ",
+		Prompt:     "myapp",
 		Port:       2324,
 		WelcomeMsg: "Welcome to My Application!\r\nType '?' for available commands.\r\n",
 		MaxHistory: 50,
