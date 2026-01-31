@@ -47,12 +47,9 @@ telnet localhost 2323
 go run test_client.go localhost:2323
 ```
 
-## 可用命令
+## 默认命令
 
-- `help` - 显示帮助信息
 - `history` - 显示命令历史
-- `clear` - 清空屏幕
-- `echo <text>` - 回显文本
 - `time` - 显示当前时间
 - `exit` / `quit` - 退出会话
 
@@ -63,22 +60,7 @@ go run test_client.go localhost:2323
 - `←` / `→` - 移动光标
 - `Backspace` - 删除字符
 - `Ctrl+C` / `Ctrl+D` - 退出会话
-
-## 项目结构
-
-```
-cmdline/
-├── main.go                 # 主程序入口
-├── internal/
-│   ├── server/
-│   │   └── server.go       # Telnet 服务器实现
-│   └── session/
-│       ├── session.go      # 会话管理
-│       ├── history.go      # 历史命令管理
-│       └── completer.go    # 命令补全器
-├── test_client.go         # 测试客户端
-└── README.md              # 项目说明
-```
+- `?` - 显示帮助信息
 
 ## 技术实现
 
