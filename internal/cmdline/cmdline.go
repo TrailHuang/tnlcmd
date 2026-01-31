@@ -132,11 +132,14 @@ func (c *CmdLine) SetConfig(key, value string) error {
 	switch key {
 	case "prompt":
 		c.config.Prompt = value
+		c.rootMode.SetPrompt(value)
 	case "welcome":
 		c.config.WelcomeMsg = value
 	case "maxhistory":
 		// 这里可以添加类型转换逻辑
 		c.config.MaxHistory, _ = strconv.Atoi(value)
+	case "port":
+		c.config.Port, _ = strconv.Atoi(value)
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}
@@ -182,7 +185,6 @@ func (c *CmdLine) Start() error {
 		return err
 	}
 	fmt.Printf("Command line interface started on port %d\n", c.config.Port)
-	fmt.Println("Connect with: telnet localhost 2323")
 
 	return nil
 }

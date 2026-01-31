@@ -400,6 +400,22 @@ func (s *Session) flushWriter() {
 	writer.Flush()
 }
 
+// UpdatePrompt 更新会话的提示符
+func (s *Session) UpdatePrompt(prompt string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.prompt = prompt
+
+	// 如果当前有活动连接，重新显示提示符
+	if s.conn != nil && !s.isClosed {
+		// 清除当前行并显示新的提示符
+		s.writerWrite("\r\x1b[K")
+		s.writerWrite(s.prompt)
+		s.flushWriter()
+	}
+}
+
 // sendWelcomeMessage 发送欢迎消息
 func (s *Session) sendWelcomeMessage() {
 	s.writerWrite(s.config.WelcomeMsg)

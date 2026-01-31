@@ -62,7 +62,7 @@ func (c *CmdLine) SetConfig(key, value string) {
 // DefaultConfig 返回默认配置
 func DefaultConfig() *Config {
 	return &Config{
-		Prompt:     "cmdline> ",
+		Prompt:     "cmdline",
 		Port:       2323,
 		WelcomeMsg: "Welcome to Command Line Interface!\r\nType '?' for available commands.\r\n",
 		MaxHistory: 100,
@@ -99,7 +99,6 @@ func SimpleExample() {
 	}()
 
 	fmt.Printf("TNLCMD server started on port %d\n", config.Port)
-	fmt.Println("Connect with: telnet localhost 2323")
 	fmt.Println("Press Ctrl+C to stop")
 
 	// 等待中断信号

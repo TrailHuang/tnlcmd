@@ -152,3 +152,13 @@ func (ts *TelnetServer) handleConnection(conn net.Conn) {
 	ts.mu.Unlock()
 	conn.Close()
 }
+
+// UpdateAllSessionsPrompt 更新所有活动会话的提示符
+func (ts *TelnetServer) UpdateAllSessionsPrompt(prompt string) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+
+	for _, session := range ts.sessions {
+		session.UpdatePrompt(prompt)
+	}
+}

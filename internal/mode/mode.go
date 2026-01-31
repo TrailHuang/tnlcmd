@@ -51,6 +51,13 @@ func NewCommandMode(name, prompt, description string) *CommandMode {
 	}
 }
 
+func (m *CommandMode) SetPrompt(prompt string) {
+	if !strings.HasSuffix(prompt, ">") {
+		prompt = prompt + "> "
+	}
+	m.Prompt = prompt
+}
+
 // AddCommand 添加命令到模式
 func (m *CommandMode) AddCommand(name, description string, handler types.CommandHandler, detailedDescription ...string) {
 	m.Commands[name] = types.CommandInfo{

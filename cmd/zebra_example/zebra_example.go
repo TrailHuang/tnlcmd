@@ -14,17 +14,13 @@ import (
 
 func main() {
 	// 创建命令行接口配置
-	config := &tnlcmd.Config{
-		Prompt:     "root",
-		Port:       2331,
-		WelcomeMsg: "Welcome to Zebra-style Router CLI!\r\nType '?' for available commands.\r\n",
-		MaxHistory: 50,
-	}
+	config := tnlcmd.DefaultConfig()
 
 	// 创建命令行接口
 	cmdline := tnlcmd.NewCmdLine(config)
 	cmdline.SetConfig("prompt", "test")
 	cmdline.SetConfig("welcome", "Welcome to  CLI!\r\nType '?' for available commands.\r\n")
+	cmdline.SetConfig("maxhistory", "50")
 
 	// 注册根模式命令（特权EXEC模式）
 	rootCommands := []struct {
@@ -111,7 +107,6 @@ func main() {
 	}
 
 	fmt.Printf("Zebra-style CLI started on port %d\n", config.Port)
-	fmt.Println("Connect with: telnet localhost 2331")
 
 	// 等待中断信号
 	sigChan := make(chan os.Signal, 1)
