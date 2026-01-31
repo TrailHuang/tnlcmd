@@ -17,12 +17,12 @@ type CommandInfo struct {
 type CommandNodeType int
 
 const (
-	NodeTypeCommand CommandNodeType = iota // 命令节点
-	NodeTypeOptional                       // 可选参数节点 []
-	NodeTypeEnum                           // 枚举参数节点 ()
-	NodeTypeRange                          // 数值范围节点 <>
-	NodeTypeString                         // 字符串参数节点（大写字母）
-	NodeTypeModeSwitch                     // 视图切换节点
+	NodeTypeCommand    CommandNodeType = iota // 命令节点
+	NodeTypeOptional                          // 可选参数节点 []
+	NodeTypeEnum                              // 枚举参数节点 ()
+	NodeTypeNum                               // 数值范围节点 <>
+	NodeTypeString                            // 字符串参数节点（大写字母）
+	NodeTypeModeSwitch                        // 视图切换节点
 )
 
 // Config 命令行配置

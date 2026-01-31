@@ -3,6 +3,7 @@ package commandtree
 import (
 	"fmt"
 	"reflect"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -18,7 +19,7 @@ const (
 	NodeTypeCommand    CommandNodeType = types.NodeTypeCommand    // 命令节点
 	NodeTypeOptional                   = types.NodeTypeOptional   // 可选参数节点 []
 	NodeTypeEnum                       = types.NodeTypeEnum       // 枚举参数节点 ()
-	NodeTypeRange                      = types.NodeTypeRange      // 数值范围节点 <>
+	NodeTypeNum                        = types.NodeTypeNum        // 数值范围节点 <>
 	NodeTypeString                     = types.NodeTypeString     // 字符串参数节点（大写字母）
 	NodeTypeModeSwitch                 = types.NodeTypeModeSwitch // 视图切换命令节点
 )
@@ -201,7 +202,7 @@ func (t *CommandTree) parseCommandPart(part string) (*CommandNode, error) {
 	}{
 		{"[", "]", NodeTypeOptional, "Optional parameter", false, t.parseOptionalParam},
 		{"(", ")", NodeTypeEnum, "Enum parameter", true, t.parseEnumParam},
-		{"<", ">", NodeTypeRange, "Range parameter", true, t.parseRangeParam},
+		{"<", ">", NodeTypeNum, "Range parameter", true, t.parseRangeParam},
 	}
 
 	// 尝试匹配参数类型
@@ -258,7 +259,7 @@ func (t *CommandTree) parseRangeParam(part string) (*CommandNode, bool) {
 		return nil, false
 	}
 
-	node := NewCommandNode(part, NodeTypeRange, "Range parameter")
+	node := NewCommandNode(part, NodeTypeNum, "Range parameter")
 	node.RangeMin = min
 	node.RangeMax = max
 	node.IsRequired = true
@@ -380,7 +381,7 @@ func (n *CommandNode) GetCompletions(args []string) []string {
 					}
 				}
 			}
-		case NodeTypeRange:
+		case NodeTypeNum:
 			if len(remainingArgs) == 0 {
 				// 返回范围提示
 				completions = append(completions, fmt.Sprintf("<%d-%d>", child.RangeMin, child.RangeMax))
@@ -433,7 +434,7 @@ func (n *CommandNode) ValidateCommand(args []string) error {
 				return fmt.Errorf("invalid enum value: %s, expected one of: %v", currentArg, child.EnumValues)
 			}
 			return child.ValidateCommand(remainingArgs)
-		case NodeTypeRange:
+		case NodeTypeNum:
 			if num, err := strconv.Atoi(currentArg); err != nil {
 				return fmt.Errorf("invalid number: %s", currentArg)
 			} else if num < child.RangeMin || num > child.RangeMax {
@@ -573,7 +574,7 @@ func getNodeTypeString(nodeType CommandNodeType) string {
 		return "Optional"
 	case NodeTypeEnum:
 		return "Enum"
-	case NodeTypeRange:
+	case NodeTypeNum:
 		return "Range"
 	case NodeTypeString:
 		return "String"
@@ -589,12 +590,12 @@ func IsParameterMatch(node *CommandNode, input string) bool {
 
 	// 检查常见的参数类型模式
 	switch node.Type {
-	case NodeTypeRange: // 范围参数，如 <1-10>
+	case NodeTypeNum: // 范围参数，如 <1-10>
 		if isNumber(input) {
 			return true
 		}
 	case NodeTypeEnum: // 枚举参数，如 (on|off)
-		return true // 暂时返回true，实际应该验证枚举值
+		return isValidEnumValue(node, input)
 	case NodeTypeString:
 		if isString(input) {
 			return true
@@ -613,6 +614,106 @@ func isNumber(str string) bool {
 
 func isString(str string) bool {
 	return len(str) > 0
+}
+
+// isValidEnumValue 检查枚举参数值是否有效
+func isValidEnumValue(node *CommandNode, input string) bool {
+	// 从节点描述中提取枚举值
+	// 枚举参数格式如: (on|off|enable|disable)
+	enumValues := extractEnumValues(node.Description)
+	if len(enumValues) == 0 {
+		// 如果没有明确的枚举值定义，接受任何输入
+		return true
+	}
+
+	// 检查输入是否在枚举值列表中（不区分大小写）
+	for _, value := range enumValues {
+		if strings.EqualFold(value, input) {
+			return true
+		}
+	}
+
+	// 如果输入不在枚举值列表中，检查是否为部分匹配（用于补全）
+	if len(input) > 0 {
+		for _, value := range enumValues {
+			if strings.HasPrefix(strings.ToLower(value), strings.ToLower(input)) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// extractEnumValues 从描述中提取枚举值
+func extractEnumValues(description string) []string {
+	// 枚举值通常用括号括起来，如 (on|off) 或 [enable|disable]
+	var enumValues []string
+
+	// 匹配括号内的枚举值
+	re := regexp.MustCompile(`[\(\[](.*?)[\)\]]`)
+	matches := re.FindStringSubmatch(description)
+	if len(matches) > 1 {
+		// 分割枚举值
+		values := strings.Split(matches[1], "|")
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				enumValues = append(enumValues, value)
+			}
+		}
+	}
+
+	return enumValues
+}
+
+// GetEnumValidationError 获取枚举参数验证错误信息
+func GetEnumValidationError(node *CommandNode, input string) string {
+	enumValues := extractEnumValues(node.Description)
+	if len(enumValues) == 0 {
+		return ""
+	}
+
+	// 检查是否为有效值
+	if isValidEnumValue(node, input) {
+		return ""
+	}
+
+	// 生成错误消息
+	if len(input) == 0 {
+		return fmt.Sprintf("参数不能为空，有效值: %s", strings.Join(enumValues, ", "))
+	}
+
+	// 检查部分匹配
+	var partialMatches []string
+	for _, value := range enumValues {
+		if strings.HasPrefix(strings.ToLower(value), strings.ToLower(input)) {
+			partialMatches = append(partialMatches, value)
+		}
+	}
+
+	if len(partialMatches) > 0 {
+		return fmt.Sprintf("不完整的参数，可能的完整值: %s", strings.Join(partialMatches, ", "))
+	}
+
+	return fmt.Sprintf("无效的参数值 '%s'，有效值: %s", input, strings.Join(enumValues, ", "))
+}
+
+// GetEnumCompletions 获取枚举参数的补全选项
+func GetEnumCompletions(node *CommandNode, input string) []string {
+	enumValues := extractEnumValues(node.Description)
+	if len(enumValues) == 0 {
+		return nil
+	}
+
+	var completions []string
+	for _, value := range enumValues {
+		if strings.HasPrefix(strings.ToLower(value), strings.ToLower(input)) {
+			completions = append(completions, value)
+		}
+	}
+
+	return completions
 }
 
 // isValidIPAddress 检查是否为有效的IP地址
