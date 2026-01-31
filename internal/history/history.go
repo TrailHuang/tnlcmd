@@ -1,4 +1,4 @@
-package tnlcmd
+package history
 
 import (
 	"sync"

@@ -1,4 +1,4 @@
-package tnlcmd
+package commandtree
 
 import (
 	"fmt"
@@ -7,18 +7,20 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/TrailHuang/tnlcmd/pkg/types"
 )
 
 // CommandNodeType 命令节点类型
-type CommandNodeType int
+type CommandNodeType = types.CommandNodeType
 
 const (
-	NodeTypeCommand    CommandNodeType = iota // 命令节点
-	NodeTypeOptional                          // 可选参数节点 []
-	NodeTypeEnum                              // 枚举参数节点 ()
-	NodeTypeRange                             // 数值范围节点 <>
-	NodeTypeString                            // 字符串参数节点（大写字母）
-	NodeTypeModeSwitch                        // 视图切换命令节点
+	NodeTypeCommand    CommandNodeType = types.NodeTypeCommand    // 命令节点
+	NodeTypeOptional                   = types.NodeTypeOptional   // 可选参数节点 []
+	NodeTypeEnum                       = types.NodeTypeEnum       // 枚举参数节点 ()
+	NodeTypeRange                      = types.NodeTypeRange      // 数值范围节点 <>
+	NodeTypeString                     = types.NodeTypeString     // 字符串参数节点（大写字母）
+	NodeTypeModeSwitch                 = types.NodeTypeModeSwitch // 视图切换命令节点
 )
 
 // CommandNode 命令树节点
@@ -26,7 +28,7 @@ type CommandNode struct {
 	Name        string
 	Type        CommandNodeType
 	Description string
-	Handler     CommandHandler
+	Handler     types.CommandHandler
 	Children    map[string]*CommandNode
 	Parent      *CommandNode
 
@@ -84,7 +86,7 @@ func (t *CommandTree) GetModeCommandKeys() []string {
 }
 
 // AddCommand 添加命令到命令树
-func (t *CommandTree) AddCommand(command string, description string, handler CommandHandler, detailedDescription ...string) error {
+func (t *CommandTree) AddCommand(command string, description string, handler types.CommandHandler, detailedDescription ...string) error {
 	// 解析完整的命令字符串，包括参数
 	nodes, err := t.parseCommandString(command)
 	if err != nil {
@@ -321,13 +323,13 @@ func (n *CommandNode) findCommand(args []string, path []string, matchArgs []stri
 	for _, child := range n.Children {
 		// 参数节点匹配：基于参数类型验证值
 		// 首先检查节点是否是参数节点（非命令节点）
-		if child.Type != NodeTypeCommand {
+		if child.Type != types.NodeTypeCommand {
 			// 可选参数需要特殊处理 - 尝试递归匹配
-			if child.Type == NodeTypeOptional {
+			if child.Type == types.NodeTypeOptional {
 				if matchedNode, matchedPath, tmpargs, err := child.findCommand(args, path, matchArgs); err == nil {
 					return matchedNode, matchedPath, tmpargs, nil
 				}
-			} else if isParameterMatch(child, currentArg) {
+			} else if IsParameterMatch(child, currentArg) {
 				// 参数节点匹配成功，返回当前节点，剩余参数作为处理函数的参数
 				return child.findCommand(remainingArgs, append(path, currentArg), append(matchArgs, currentArg))
 			}
@@ -530,7 +532,7 @@ func (t *CommandTree) printNode(node *CommandNode, prefix string, isLast bool, r
 }
 
 // getFunctionName 获取函数名称
-func getFunctionName(handler CommandHandler) string {
+func getFunctionName(handler types.CommandHandler) string {
 	if handler == nil {
 		return "nil"
 	}
@@ -580,8 +582,8 @@ func getNodeTypeString(nodeType CommandNodeType) string {
 	}
 }
 
-// isParameterMatch 检查输入是否匹配参数节点
-func isParameterMatch(node *CommandNode, input string) bool {
+// IsParameterMatch 检查参数是否匹配
+func IsParameterMatch(node *CommandNode, input string) bool {
 	// 简单的参数匹配逻辑
 	// 在实际实现中，应该根据参数类型进行更复杂的验证
 

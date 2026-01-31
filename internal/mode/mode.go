@@ -1,9 +1,12 @@
-package tnlcmd
+package mode
 
 import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/TrailHuang/tnlcmd/internal/commandtree"
+	"github.com/TrailHuang/tnlcmd/pkg/types"
 )
 
 // CommandMode 命令模式
@@ -11,18 +14,17 @@ type CommandMode struct {
 	Name        string
 	Prompt      string
 	Description string
-	Commands    map[string]CommandInfo
-	Parent      *CommandMode
+	Commands    map[string]types.CommandInfo
 	Children    map[string]*CommandMode
-	commandTree *CommandTree // 当前视图的独立命令树
+	Parent      *CommandMode
+	CommandTree *commandtree.CommandTree // 每个视图的独立命令树
 }
 
 // CommandContext 命令上下文
 type CommandContext struct {
 	CurrentMode *CommandMode
 	Path        []string
-	Variables   map[string]string
-	commandTree *CommandTree
+	commandTree *commandtree.CommandTree
 }
 
 // NewCommandMode 创建新的命令模式
@@ -43,23 +45,23 @@ func NewCommandMode(name, prompt, description string) *CommandMode {
 		Name:        name,
 		Prompt:      formattedPrompt,
 		Description: description,
-		Commands:    make(map[string]CommandInfo),
+		Commands:    make(map[string]types.CommandInfo),
 		Children:    make(map[string]*CommandMode),
-		commandTree: NewCommandTree(), // 为每个视图创建独立的命令树
+		CommandTree: commandtree.NewCommandTree(), // 为每个视图创建独立的命令树
 	}
 }
 
 // AddCommand 添加命令到模式
-func (m *CommandMode) AddCommand(name, description string, handler CommandHandler, detailedDescription ...string) {
-	m.Commands[name] = CommandInfo{
+func (m *CommandMode) AddCommand(name, description string, handler types.CommandHandler, detailedDescription ...string) {
+	m.Commands[name] = types.CommandInfo{
 		Name:        name,
 		Description: description,
 		Handler:     handler,
 	}
 
 	// 同时添加到当前视图的独立命令树
-	if m.commandTree != nil {
-		_ = m.commandTree.AddCommand(name, description, handler, detailedDescription...)
+	if m.CommandTree != nil {
+		_ = m.CommandTree.AddCommand(name, description, handler, detailedDescription...)
 	}
 }
 
@@ -96,24 +98,24 @@ func (c *CommandContext) ChangeMode(mode *CommandMode) {
 		c.Path = []string{mode.Name}
 	}
 	// 打印命令树结构
-	if c.CurrentMode.commandTree != nil {
+	if c.CurrentMode.CommandTree != nil {
 		fmt.Printf("\n=== Command Tree Structure ===\n")
-		fmt.Printf("%s\n", c.CurrentMode.commandTree.PrintTree())
+		fmt.Printf("%s\n", c.CurrentMode.CommandTree.PrintTree())
 		fmt.Printf("=== End of Command Tree ===\n\n")
 	}
 }
 
 // GetAvailableCommands 获取当前模式下可用的命令
-func (c *CommandContext) GetAvailableCommands() map[string]CommandInfo {
-	commands := make(map[string]CommandInfo)
+func (c *CommandContext) GetAvailableCommands() map[string]types.CommandInfo {
+	commands := make(map[string]types.CommandInfo)
 
 	// 添加内置命令（在所有模式下都可用）
-	commands["help"] = CommandInfo{
+	commands["help"] = types.CommandInfo{
 		Name:        "help",
 		Description: "Show this help message",
 		Handler:     c.createHelpHandler(),
 	}
-	commands["?"] = CommandInfo{
+	commands["?"] = types.CommandInfo{
 		Name:        "?",
 		Description: "Show this help message",
 		Handler:     c.createHelpHandler(),
@@ -129,7 +131,7 @@ func (c *CommandContext) GetAvailableCommands() map[string]CommandInfo {
 	for name, subMode := range rootMode.Children {
 		// 如果当前不是该子模式，则显示切换命令
 		if c.CurrentMode != subMode {
-			commands[name] = CommandInfo{
+			commands[name] = types.CommandInfo{
 				Name:        name,
 				Description: fmt.Sprintf("Enter %s configuration mode", subMode.Description),
 				Handler:     c.createModeChangeHandler(subMode),
@@ -140,24 +142,24 @@ func (c *CommandContext) GetAvailableCommands() map[string]CommandInfo {
 	// 添加退出命令
 	if c.CurrentMode.Parent == nil {
 		// 根视图：exit和quit都关闭连接
-		commands["exit"] = CommandInfo{
+		commands["exit"] = types.CommandInfo{
 			Name:        "exit",
 			Description: "Exit and close connection",
 			Handler:     c.createCloseConnectionHandler(),
 		}
-		commands["quit"] = CommandInfo{
+		commands["quit"] = types.CommandInfo{
 			Name:        "quit",
 			Description: "Exit and close connection",
 			Handler:     c.createCloseConnectionHandler(),
 		}
 	} else {
 		// 子视图：quit退出到根视图，exit关闭连接
-		commands["quit"] = CommandInfo{
+		commands["quit"] = types.CommandInfo{
 			Name:        "quit",
 			Description: "Exit to privileged EXEC mode",
 			Handler:     c.createExitToRootHandler(),
 		}
-		commands["exit"] = CommandInfo{
+		commands["exit"] = types.CommandInfo{
 			Name:        "exit",
 			Description: "Exit and close connection",
 			Handler:     c.createCloseConnectionHandler(),
@@ -168,7 +170,7 @@ func (c *CommandContext) GetAvailableCommands() map[string]CommandInfo {
 }
 
 // createModeChangeHandler 创建模式切换处理函数
-func (c *CommandContext) createModeChangeHandler(mode *CommandMode) CommandHandler {
+func (c *CommandContext) createModeChangeHandler(mode *CommandMode) types.CommandHandler {
 	return func(args []string, writer io.Writer) error {
 		c.ChangeMode(mode)
 		writer.Write([]byte(fmt.Sprintf("Entering %s mode\r\n", mode.Description)))
@@ -186,7 +188,7 @@ func (c *CommandContext) getRootMode() *CommandMode {
 }
 
 // createExitToRootHandler 创建退出到根模式处理函数
-func (c *CommandContext) createExitToRootHandler() CommandHandler {
+func (c *CommandContext) createExitToRootHandler() types.CommandHandler {
 	return func(args []string, writer io.Writer) error {
 		// 找到根模式
 		root := c.getRootMode()
@@ -197,7 +199,7 @@ func (c *CommandContext) createExitToRootHandler() CommandHandler {
 }
 
 // createCloseConnectionHandler 创建关闭连接处理函数
-func (c *CommandContext) createCloseConnectionHandler() CommandHandler {
+func (c *CommandContext) createCloseConnectionHandler() types.CommandHandler {
 	return func(args []string, writer io.Writer) error {
 		writer.Write([]byte("Connection closed\r\n"))
 		return io.EOF
@@ -205,7 +207,7 @@ func (c *CommandContext) createCloseConnectionHandler() CommandHandler {
 }
 
 // createHelpHandler 创建帮助命令处理函数
-func (c *CommandContext) createHelpHandler() CommandHandler {
+func (c *CommandContext) createHelpHandler() types.CommandHandler {
 	return func(args []string, writer io.Writer) error {
 		commands := c.GetAvailableCommands()
 

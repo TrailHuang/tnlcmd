@@ -1,14 +1,18 @@
-package tnlcmd
+package completer
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/TrailHuang/tnlcmd/internal/commandctx"
+	"github.com/TrailHuang/tnlcmd/internal/commandtree"
+	"github.com/TrailHuang/tnlcmd/pkg/types"
 )
 
 // CommandCompleter 命令补全器
 type CommandCompleter struct {
-	commandTree *CommandTree    // 树形命令存储（向后兼容）
-	context     *CommandContext // 命令上下文，用于访问当前视图的独立命令树
+	commandTree *commandtree.CommandTree   // 树形命令存储（向后兼容）
+	context     *commandctx.CommandContext // 命令上下文，用于访问当前视图的独立命令树
 }
 
 // NewCommandCompleter 创建新的命令补全器
@@ -17,21 +21,26 @@ func NewCommandCompleter() *CommandCompleter {
 }
 
 // NewCommandCompleterWithTree 创建带命令树的补全器
-func NewCommandCompleterWithTree(tree *CommandTree) *CommandCompleter {
+func NewCommandCompleterWithTree(tree *commandtree.CommandTree) *CommandCompleter {
 	return &CommandCompleter{
 		commandTree: tree,
 	}
 }
 
 // NewCommandCompleterWithContext 创建带上下文的补全器
-func NewCommandCompleterWithContext(context *CommandContext) *CommandCompleter {
+func NewCommandCompleterWithContext(context *commandctx.CommandContext) *CommandCompleter {
 	return &CommandCompleter{
 		context: context,
 	}
 }
 
+// UpdateContext 更新补全器的上下文
+func (c *CommandCompleter) UpdateContext(context *commandctx.CommandContext) {
+	c.context = context
+}
+
 // UpdateCommandTree 更新命令树
-func (c *CommandCompleter) UpdateCommandTree(tree *CommandTree) {
+func (c *CommandCompleter) UpdateCommandTree(tree *commandtree.CommandTree) {
 	c.commandTree = tree
 }
 
@@ -40,9 +49,9 @@ func (c *CommandCompleter) Complete(input string) []string {
 	var completions []string
 
 	// 优先使用当前视图的独立命令树
-	if c.context != nil && c.context.CurrentMode != nil && c.context.CurrentMode.commandTree != nil {
+	if c.context != nil && c.context.CurrentMode != nil && c.context.CurrentMode.CommandTree != nil {
 		inputParts := strings.Fields(input)
-		node := c.context.CurrentMode.commandTree.Root
+		node := c.context.CurrentMode.CommandTree.Root
 
 		// 遍历到当前层级
 		for i := 0; i < len(inputParts)-1; i++ {
@@ -62,7 +71,7 @@ func (c *CommandCompleter) Complete(input string) []string {
 			// 收集所有匹配的子节点（包括视图切换命令）
 			for name, child := range node.Children {
 				// 补全命令节点和视图切换命令节点
-				if (child.Type == NodeTypeCommand || child.Type == NodeTypeModeSwitch) && strings.HasPrefix(name, currentInput) {
+				if (child.Type == types.NodeTypeCommand || child.Type == types.NodeTypeModeSwitch) && strings.HasPrefix(name, currentInput) {
 					matchingChildren = append(matchingChildren, name)
 				}
 			}
@@ -91,7 +100,7 @@ func (c *CommandCompleter) Complete(input string) []string {
 		} else {
 			// 空输入，返回所有一级命令（包括视图切换命令）
 			for name, child := range node.Children {
-				if child.Type == NodeTypeCommand || child.Type == NodeTypeModeSwitch {
+				if child.Type == types.NodeTypeCommand || child.Type == types.NodeTypeModeSwitch {
 					completions = append(completions, name)
 				}
 			}
@@ -109,10 +118,10 @@ func (c *CommandCompleter) GetNextLevelCompletions(input string) []string {
 	var nextLevel []string
 
 	// 使用当前视图的命令树
-	if c.context == nil || c.context.CurrentMode == nil || c.context.CurrentMode.commandTree == nil {
+	if c.context == nil || c.context.CurrentMode == nil || c.context.CurrentMode.CommandTree == nil {
 		return nextLevel
 	}
-	currentNode := c.context.CurrentMode.commandTree.Root
+	currentNode := c.context.CurrentMode.CommandTree.Root
 
 	inputParts := strings.Fields(input)
 	node := currentNode
@@ -140,7 +149,7 @@ func (c *CommandCompleter) GetNextLevelCompletions(input string) []string {
 
 	// 补全视图切换命令（从任意视图都可以切换到其他视图）
 	if len(inputParts) == 1 && c.context != nil && c.context.CurrentMode != nil {
-		rootMode := c.context.getRootMode()
+		rootMode := c.context.GetRootMode()
 		for name, subMode := range rootMode.Children {
 			// 如果当前不是该子模式，则添加切换命令
 			if c.context.CurrentMode != subMode && strings.HasPrefix(name, lastPart) {
@@ -170,12 +179,12 @@ func (c *CommandCompleter) GetCompletions(input string) []string {
 	var completions []string
 
 	// 使用当前视图的命令树
-	if c.context == nil || c.context.CurrentMode == nil || c.context.CurrentMode.commandTree == nil {
+	if c.context == nil || c.context.CurrentMode == nil || c.context.CurrentMode.CommandTree == nil {
 		return completions
 	}
 
 	inputParts := strings.Fields(input)
-	node := c.commandTree.Root
+	node := c.context.CurrentMode.CommandTree.Root
 
 	for i := 0; i < len(inputParts)-1; i++ {
 		if child, exists := node.Children[inputParts[i]]; exists {
@@ -187,7 +196,7 @@ func (c *CommandCompleter) GetCompletions(input string) []string {
 
 	if len(inputParts) == 0 {
 		for name, child := range node.Children {
-			if child.Type == NodeTypeCommand {
+			if child.Type == types.NodeTypeCommand {
 				completions = append(completions, name)
 			}
 		}
@@ -198,7 +207,7 @@ func (c *CommandCompleter) GetCompletions(input string) []string {
 	var matchingChildren []string
 
 	for name, child := range node.Children {
-		if child.Type == NodeTypeCommand && strings.HasPrefix(name, currentInput) {
+		if child.Type == types.NodeTypeCommand && strings.HasPrefix(name, currentInput) {
 			matchingChildren = append(matchingChildren, name)
 		}
 	}
@@ -231,12 +240,12 @@ func (c *CommandCompleter) GetParameterCompletions(input string) []string {
 	var completions []string
 
 	// 使用当前视图的命令树
-	if c.context == nil || c.context.CurrentMode == nil || c.context.CurrentMode.commandTree == nil {
+	if c.context == nil || c.context.CurrentMode == nil || c.context.CurrentMode.CommandTree == nil {
 		return completions
 	}
 
 	inputParts := strings.Fields(input)
-	node := c.context.CurrentMode.commandTree.Root
+	node := c.context.CurrentMode.CommandTree.Root
 
 	for i := 0; i < len(inputParts); i++ {
 		if child, exists := node.Children[inputParts[i]]; exists {
@@ -252,7 +261,7 @@ func (c *CommandCompleter) GetParameterCompletions(input string) []string {
 	}
 
 	for name, child := range node.Children {
-		if child.Type != NodeTypeCommand && strings.HasPrefix(name, lastPart) {
+		if child.Type != types.NodeTypeCommand && strings.HasPrefix(name, lastPart) {
 			completions = append(completions, name)
 		}
 	}
@@ -282,12 +291,12 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 	var suggestions []string
 
 	// 使用当前视图的命令树
-	if c.context == nil || c.context.CurrentMode == nil || c.context.CurrentMode.commandTree == nil {
+	if c.context == nil || c.context.CurrentMode == nil || c.context.CurrentMode.CommandTree == nil {
 		return suggestions
 	}
 
 	inputParts := strings.Fields(input)
-	node := c.context.CurrentMode.commandTree.Root
+	node := c.context.CurrentMode.CommandTree.Root
 
 	// 遍历到当前层级
 	for i := 0; i < len(inputParts); i++ {
@@ -298,7 +307,7 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 			paramMatched := false
 			for _, child := range node.Children {
 				// 如果是参数节点，检查参数类型是否匹配
-				if child.Type != NodeTypeCommand && isParameterMatch(child, inputParts[i]) {
+				if child.Type != types.NodeTypeCommand && commandtree.IsParameterMatch(child, inputParts[i]) {
 					node = child
 					paramMatched = true
 					break
@@ -314,15 +323,15 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 	// 显示当前节点的所有子节点（包括参数节点），返回命令和描述的组合
 	for name, child := range node.Children {
 		// 格式："命令名称（固定32宽度左对齐） - 描述"
-		suggestion := fmt.Sprintf("%-32s  %s", name, child.Description)
+		suggestion := fmt.Sprintf("%-32s %s", name, child.Description)
 		suggestions = append(suggestions, suggestion)
 	}
 	//将视图切换命令也添加到建议中
 	if len(inputParts) <= 1 {
-		for _, key := range c.context.CurrentMode.commandTree.GetModeCommandKeys() {
+		for _, key := range c.context.CurrentMode.CommandTree.GetModeCommandKeys() {
 			if strings.HasPrefix(key, input) {
 				// 对于视图切换命令，使用默认描述
-				suggestion := fmt.Sprintf("%-32s  Switch to %s mode", key, key)
+				suggestion := fmt.Sprintf("%-32s Switch to %s mode", key, key)
 				suggestions = append(suggestions, suggestion)
 			}
 		}

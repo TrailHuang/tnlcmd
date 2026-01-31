@@ -61,10 +61,7 @@ func main() {
 	fmt.Println("\nShutting down...")
 
 	// 停止命令行服务
-	err = cmdline.Stop()
-	if err != nil {
-		log.Printf("Error stopping cmdline: %v", err)
-	}
+	cmdline.Stop()
 
 	fmt.Println("Command line interface stopped")
 }

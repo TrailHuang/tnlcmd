@@ -1,4 +1,4 @@
-package tnlcmd
+package session
 
 import (
 	"bufio"
@@ -10,34 +10,46 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/TrailHuang/tnlcmd/internal/commandctx"
+	"github.com/TrailHuang/tnlcmd/internal/commandtree"
+	"github.com/TrailHuang/tnlcmd/internal/completer"
+	"github.com/TrailHuang/tnlcmd/internal/history"
+	"github.com/TrailHuang/tnlcmd/internal/mode"
+	"github.com/TrailHuang/tnlcmd/pkg/types"
 )
 
 // Session 会话结构
 type Session struct {
 	conn       net.Conn
-	config     *Config
-	commands   map[string]CommandInfo
+	config     *types.Config
+	commands   map[string]types.CommandInfo
 	mu         sync.RWMutex
 	lastActive time.Time
 	isClosed   bool
-	history    *CommandHistory
-	completer  *CommandCompleter
-	context    *CommandContext
+	history    *history.CommandHistory
+	completer  *completer.CommandCompleter
+	context    *commandctx.CommandContext
 	prompt     string
 }
 
 // NewSession 创建新的会话
-func NewSession(conn net.Conn, config *Config, commands map[string]CommandInfo) *Session {
-	s := &Session{
-		conn:       conn,
-		config:     config,
-		commands:   commands,
-		lastActive: time.Now(),
-		prompt:     config.Prompt,
+func NewSession(conn net.Conn, config *types.Config, commands map[string]types.CommandInfo) *Session {
+	// 创建命令上下文
+	context := &commandctx.CommandContext{
+		CurrentMode: config.RootMode.(*mode.CommandMode),
 	}
 
-	s.history = NewCommandHistory(config.MaxHistory)
-	s.completer = NewCommandCompleterWithContext(s.context)
+	s := &Session{
+		conn:     conn,
+		config:   config,
+		commands: commands,
+		context:  context,
+		prompt:   config.Prompt,
+	}
+
+	s.history = history.NewCommandHistory(config.MaxHistory)
+	s.completer = completer.NewCommandCompleterWithContext(s.context)
 
 	// 启用telnet字符模式
 	s.enableTelnetCharacterMode()
@@ -45,18 +57,18 @@ func NewSession(conn net.Conn, config *Config, commands map[string]CommandInfo) 
 	return s
 }
 
-// NewSessionWithContext 创建带上下文的新会话
-func NewSessionWithContext(conn net.Conn, config *Config, context *CommandContext) *Session {
+// NewSessionWithContext 使用现有上下文创建新的会话
+func NewSessionWithContext(conn net.Conn, config *types.Config, context *commandctx.CommandContext) *Session {
 	s := &Session{
 		conn:       conn,
 		config:     config,
-		lastActive: time.Now(),
 		context:    context,
-		prompt:     context.CurrentMode.Prompt,
+		lastActive: time.Now(),
+		prompt:     config.Prompt,
 	}
 
-	s.history = NewCommandHistory(config.MaxHistory)
-	s.completer = NewCommandCompleterWithTree(context.commandTree)
+	s.history = history.NewCommandHistory(config.MaxHistory)
+	s.completer = completer.NewCommandCompleterWithTree(context.CommandTree)
 
 	// 更新命令列表
 	s.updateCommands()
@@ -73,9 +85,9 @@ func (s *Session) updateCommands() {
 		s.commands = s.context.GetAvailableCommands()
 		s.prompt = s.context.CurrentMode.Prompt
 		// 更新补全器的上下文（不再需要更新命令树，因为补全器使用上下文）
-		s.completer.context = s.context
+		s.completer.UpdateContext(s.context)
 	} else {
-		s.commands = make(map[string]CommandInfo)
+		s.commands = make(map[string]types.CommandInfo)
 		s.prompt = s.config.Prompt
 	}
 }
@@ -242,15 +254,15 @@ func (s *Session) processCommand(cmd string) error {
 	defer s.mu.RUnlock()
 
 	// 首先检查当前视图的命令树
-	if s.context != nil && s.context.CurrentMode != nil && s.context.CurrentMode.commandTree != nil {
-		node, matchedPath, args, err := s.context.CurrentMode.commandTree.FindCommand(parts)
+	if s.context != nil && s.context.CurrentMode != nil && s.context.CurrentMode.CommandTree != nil {
+		node, matchedPath, args, err := s.context.CurrentMode.CommandTree.FindCommand(parts)
 		if err == nil && node != nil {
 			// 处理视图切换命令
-			if node.Type == NodeTypeModeSwitch {
+			if node.Type == types.NodeTypeModeSwitch {
 				if s.context != nil && len(parts) == len(matchedPath) {
 					// 查找要切换到的视图
 					modeName := node.ModeName
-					rootMode := s.context.getRootMode()
+					rootMode := s.context.GetRootMode()
 					if subMode, exists := rootMode.Children[modeName]; exists {
 						s.context.ChangeMode(subMode)
 						s.writerWrite(fmt.Sprintf("Entering %s mode\r\n", subMode.Description))
@@ -292,7 +304,7 @@ func (s *Session) processCommand(cmd string) error {
 }
 
 // validateCommandParameters 验证命令参数数量是否正确
-func (s *Session) validateCommandParameters(node *CommandNode, matchedPath []string, args []string) error {
+func (s *Session) validateCommandParameters(node *commandtree.CommandNode, matchedPath []string, args []string) error {
 	// 计算命令需要的参数数量
 	requiredParams := 0
 	optionalParams := 0
@@ -300,7 +312,7 @@ func (s *Session) validateCommandParameters(node *CommandNode, matchedPath []str
 	// 从当前节点往根节点方向回溯，统计路径上的参数
 	current := node
 	for current != nil {
-		if current.Type != NodeTypeCommand {
+		if current.Type != types.NodeTypeCommand {
 			// 参数节点
 			if current.IsRequired {
 				requiredParams++

@@ -1,41 +1,37 @@
-package tnlcmd
+package cmdline
 
 import (
 	"fmt"
 	"io"
 	"strconv"
 	"sync"
+
+	"github.com/TrailHuang/tnlcmd/internal/commandctx"
+	"github.com/TrailHuang/tnlcmd/internal/commandtree"
+	"github.com/TrailHuang/tnlcmd/internal/mode"
+	"github.com/TrailHuang/tnlcmd/internal/server"
+	"github.com/TrailHuang/tnlcmd/pkg/types"
 )
 
 // CommandHandler 命令处理函数类型
-type CommandHandler func(args []string, writer io.Writer) error
+type CommandHandler = types.CommandHandler
 
 // CommandInfo 命令信息
-type CommandInfo struct {
-	Name        string
-	Description string
-	Handler     CommandHandler
-}
+type CommandInfo = types.CommandInfo
 
 // Config 命令行配置
-type Config struct {
-	Prompt     string
-	Port       int
-	WelcomeMsg string
-	MaxHistory int
-	RootMode   *CommandMode
-}
+type Config = types.Config
 
 // CmdLine 命令行接口
 type CmdLine struct {
 	config      *Config
-	commands    map[string]CommandInfo // 向后兼容的平面命令存储
-	commandTree *CommandTree           // 新的树形命令存储
+	commands    map[string]CommandInfo   // 向后兼容的平面命令存储
+	commandTree *commandtree.CommandTree // 新的树形命令存储
 	mu          sync.RWMutex
-	server      *TelnetServer
+	server      *server.TelnetServer
 	isRunning   bool
-	rootMode    *CommandMode
-	context     *CommandContext
+	rootMode    *mode.CommandMode
+	context     *commandctx.CommandContext
 }
 
 // NewCmdLine 创建新的命令行接口
@@ -50,20 +46,18 @@ func NewCmdLine(config *Config) *CmdLine {
 	}
 
 	// 创建根模式
-	rootMode := NewCommandMode("root", config.Prompt, "privileged EXEC mode")
+	rootMode := mode.NewCommandMode("root", config.Prompt, "privileged EXEC mode")
 
 	// 设置配置的根模式
 	config.RootMode = rootMode
 
 	// 创建命令树
-	commandTree := NewCommandTree()
+	commandTree := commandtree.NewCommandTree()
 
 	// 创建命令上下文
-	context := &CommandContext{
+	context := &commandctx.CommandContext{
 		CurrentMode: rootMode,
 		Path:        []string{},
-		Variables:   make(map[string]string),
-		commandTree: commandTree,
 	}
 
 	return &CmdLine{
@@ -91,7 +85,7 @@ func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandl
 }
 
 // findOrCreateMode 查找或创建模式路径
-func (c *CmdLine) findOrCreateMode(modePath string, description string) *CommandMode {
+func (c *CmdLine) findOrCreateMode(modePath string, description string) *mode.CommandMode {
 	currentMode := c.rootMode
 	if modePath == "" {
 		return currentMode
@@ -104,7 +98,7 @@ func (c *CmdLine) findOrCreateMode(modePath string, description string) *Command
 
 	// 创建新的子模式
 	prompt := modeName
-	subMode := NewCommandMode(modeName, prompt, description)
+	subMode := mode.NewCommandMode(modeName, prompt, description)
 	currentMode.AddSubMode(subMode)
 
 	// 同时添加到命令树，使用专门的视图切换命令方法
@@ -175,7 +169,7 @@ func (c *CmdLine) Start() error {
 	}
 
 	// 创建telnet服务器
-	c.server = NewTelnetServerWithContext(c.config, c.context)
+	c.server = server.NewTelnetServerWithContext(c.config, c.context)
 	fmt.Printf("Telnet server created, starting...\n")
 
 	// 启动服务器
