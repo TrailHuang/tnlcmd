@@ -1,10 +1,8 @@
 // Package types 定义 TNLCMD 库的公共类型
 package types
 
-import "io"
-
 // CommandHandler 命令处理函数类型
-type CommandHandler func(args []string, writer io.Writer) error
+type CommandHandler func(args []string) string
 
 // CommandInfo 命令信息
 type CommandInfo struct {

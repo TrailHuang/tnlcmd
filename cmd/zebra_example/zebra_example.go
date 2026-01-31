@@ -26,7 +26,7 @@ func main() {
 	rootCommands := []struct {
 		name, desc   string
 		detailedDesc string
-		handler      func([]string, io.Writer) error
+		handler      func([]string) string
 	}{
 		{"show running-config", "Show running system information", "show configuration\ndisplay running config", showHandler},
 		{"show config", "Show running system information", "show configuration\ndisplay system config", showHandler},
@@ -57,7 +57,7 @@ func main() {
 	configCommands := []struct {
 		mode, name, desc string
 		detailedDesc     string
-		handler          func([]string, io.Writer) error
+		handler          func([]string) string
 	}{
 		{"configure", "router PROTOCOL", "Enable a routing process", "enable routing\nconfigure routing protocol", routerHandler},
 		{"configure", "hostname HOSTNAME", "Set system's network name", "set hostname\nconfigure system hostname", hostnameHandler},
@@ -84,7 +84,7 @@ func main() {
 	interfaceCommands := []struct {
 		mode, name, desc string
 		detailedDesc     string
-		handler          func([]string, io.Writer) error
+		handler          func([]string) string
 	}{
 		{"interface", "ip IPADDR MASK", "Interface Internet Protocol config commands", "configure ip\nset interface ip address", ipHandler},
 		{"interface", "description TEXT", "Interface specific description", "set description\nconfigure interface description", descriptionHandler},
@@ -122,41 +122,45 @@ func main() {
 }
 
 // 特权EXEC模式命令处理函数
-func showHandler(args []string, writer io.Writer) error {
+func showHandler(args []string) string {
+	var result strings.Builder
+
 	if len(args) == 0 {
-		writer.Write([]byte("Available show commands:\r\n"))
-		writer.Write([]byte("  show version    - Show system version\r\n"))
-		writer.Write([]byte("  show interfaces - Show interface information\r\n"))
-		writer.Write([]byte("  show ip route   - Show IP routing table\r\n"))
-		return nil
+		result.WriteString("Available show commands:\r\n")
+		result.WriteString("  show version    - Show system version\r\n")
+		result.WriteString("  show interfaces - Show interface information\r\n")
+		result.WriteString("  show ip route   - Show IP routing table\r\n")
+		return result.String()
 	}
 
 	switch args[0] {
 	case "version":
-		writer.Write([]byte("RouterOS Version 7.8\r\nBuild: 2024-01-20\r\n"))
+		result.WriteString("Zebra CLI Version 1.0\r\n")
+		result.WriteString("Build date: 2024-01-01\r\n")
 	case "interfaces":
-		writer.Write([]byte("Interface Status:\r\n  eth0: UP, 1000Mbps\r\n  eth1: DOWN, 100Mbps\r\n"))
+		result.WriteString("Interface Status:\r\n")
+		result.WriteString("  eth0: UP, 192.168.1.1/24\r\n")
+		result.WriteString("  eth1: DOWN, 0.0.0.0/0\r\n")
 	case "ip", "route":
-		writer.Write([]byte("IP Routing Table:\r\n  C 192.168.1.0/24 is directly connected, eth0\r\n  S 0.0.0.0/0 [1/0] via 192.168.1.1\r\n"))
+		result.WriteString("IP Routing Table:\r\n")
+		result.WriteString("  C    192.168.1.0/24 is directly connected, eth0\r\n")
+		result.WriteString("  S*   0.0.0.0/0 [1/0] via 192.168.1.254\r\n")
 	default:
-		writer.Write([]byte("Unknown show command\r\n"))
+		result.WriteString(fmt.Sprintf("Unknown show command: %s\r\n", args[0]))
 	}
-	return nil
+
+	return result.String()
 }
 
-func setValueHandler(args []string, writer io.Writer) error {
+func setValueHandler(args []string) string {
 	if len(args) == 0 {
-		writer.Write([]byte("Usage: set <parameter> <value>\r\n"))
-		writer.Write([]byte("Available parameters: debug, name\r\n"))
-		return nil
+		return "Usage: set <parameter> <value>\r\n"
 	}
 
-	writer.Write([]byte(fmt.Sprintf("arg count %d,  '%v'\r\n", len(args), args)))
-	return nil
-
+	return fmt.Sprintf("Set %s to %s\r\n", args[0], strings.Join(args[1:], " "))
 }
 
-func pingHandler(args []string, writer io.Writer) error {
+func pingHandler(args []string) string {
 	target := "8.8.8.8"
 	if len(args) > 0 {
 		target = args[0]
@@ -168,18 +172,15 @@ func pingHandler(args []string, writer io.Writer) error {
 		"--- 8.8.8.8 ping statistics ---\r\n"+
 		"2 packets transmitted, 2 packets received, 0%% packet loss\r\n", target)
 
-	writer.Write([]byte(output))
-	return nil
+	return output
 }
 
-func clearHandler(args []string, writer io.Writer) error {
-	writer.Write([]byte("Functions cleared\r\n"))
-	return nil
+func clearHandler(args []string) string {
+	return "Functions cleared\r\n"
 }
 
-func debugHandler(args []string, writer io.Writer) error {
-	writer.Write([]byte("Debugging enabled\r\n"))
-	return nil
+func debugHandler(args []string) string {
+	return "Debugging enabled\r\n"
 }
 
 // 全局配置模式命令处理函数
@@ -192,62 +193,49 @@ func interfaceHandler(args []string, writer io.Writer) error {
 	return nil
 }
 
-func routerHandler(args []string, writer io.Writer) error {
+func routerHandler(args []string) string {
 	if len(args) == 0 {
-		writer.Write([]byte("Usage: router <protocol>\r\n"))
-		return nil
+		return "Usage: router <protocol>\r\n"
 	}
-	writer.Write([]byte(fmt.Sprintf("Enabling %s routing\r\n", args[0])))
-	return nil
+	return fmt.Sprintf("Enabling %s routing\r\n", args[0])
 }
 
-func hostnameHandler(args []string, writer io.Writer) error {
+func hostnameHandler(args []string) string {
 	if len(args) == 0 {
-		writer.Write([]byte("Usage: hostname <name>\r\n"))
-		return nil
+		return "Usage: hostname <name>\r\n"
 	}
-	writer.Write([]byte(fmt.Sprintf("Hostname set to %s\r\n", args[0])))
-	return nil
+	return fmt.Sprintf("Hostname set to %s\r\n", args[0])
 }
 
-func bannerHandler(args []string, writer io.Writer) error {
+func bannerHandler(args []string) string {
 	if len(args) == 0 {
-		writer.Write([]byte("Usage: banner <message>\r\n"))
-		return nil
+		return "Usage: banner <message>\r\n"
 	}
-	writer.Write([]byte("Banner set\r\n"))
-	return nil
+	return "Banner set\r\n"
 }
 
 // 接口配置模式命令处理函数
-func ipHandler(args []string, writer io.Writer) error {
+func ipHandler(args []string) string {
 	if len(args) < 2 {
-		writer.Write([]byte("Usage: ip address <ip-address> <subnet-mask>\r\n"))
-		return nil
+		return "Usage: ip address <ip-address> <subnet-mask>\r\n"
 	}
-	writer.Write([]byte(fmt.Sprintf("IP address %s/%s configured\r\n", args[0], args[1])))
-	return nil
+	return fmt.Sprintf("IP address %s/%s configured\r\n", args[0], args[1])
 }
 
-func descriptionHandler(args []string, writer io.Writer) error {
+func descriptionHandler(args []string) string {
 	if len(args) == 0 {
-		writer.Write([]byte("Usage: description <text>\r\n"))
-		return nil
+		return "Usage: description <text>\r\n"
 	}
-	writer.Write([]byte("Description set\r\n"))
-	return nil
+	return "Description set\r\n"
 }
 
-func shutdownHandler(args []string, writer io.Writer) error {
-	writer.Write([]byte("Interface shutdown\r\n"))
-	return nil
+func shutdownHandler(args []string) string {
+	return "Interface shutdown\r\n"
 }
 
-func noHandler(args []string, writer io.Writer) error {
+func noHandler(args []string) string {
 	if len(args) == 0 {
-		writer.Write([]byte("Usage: no <command>\r\n"))
-		return nil
+		return "Usage: no <command>\r\n"
 	}
-	writer.Write([]byte(fmt.Sprintf("Command '%s' negated\r\n", strings.Join(args, " "))))
-	return nil
+	return fmt.Sprintf("Command '%s' negated\r\n", strings.Join(args, " "))
 }

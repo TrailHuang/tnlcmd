@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/TrailHuang/tnlcmd/internal/commandctx"
@@ -236,9 +237,11 @@ func (c *CmdLine) registerBuiltinCommands() {
 }
 
 // helpHandler 帮助命令处理函数
-func (c *CmdLine) helpHandler(args []string, writer io.Writer) error {
+func (c *CmdLine) helpHandler(args []string) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+
+	var result strings.Builder
 
 	// 使用当前会话的上下文获取可用命令（如果可用）
 	var commands map[string]CommandInfo
@@ -249,19 +252,19 @@ func (c *CmdLine) helpHandler(args []string, writer io.Writer) error {
 		commands = c.commands
 	}
 
-	writer.Write([]byte("Available commands:\r\n"))
+	result.WriteString("Available commands:\r\n")
 	for name, cmd := range commands {
 		// 跳过内置命令的重复显示
 		if name == "help" || name == "?" {
 			continue
 		}
-		writer.Write([]byte(fmt.Sprintf("  %-15s - %s\r\n", name, cmd.Description)))
+		result.WriteString(fmt.Sprintf("  %-15s - %s\r\n", name, cmd.Description))
 	}
 
 	// 显示内置命令
-	writer.Write([]byte("  help/?          - Show this help message\r\n"))
+	result.WriteString("  help/?          - Show this help message\r\n")
 
-	return nil
+	return result.String()
 }
 
 // setHandler set命令处理函数
@@ -283,7 +286,6 @@ func (c *CmdLine) setHandler(args []string, writer io.Writer) error {
 }
 
 // exitHandler 退出命令处理函数
-func (c *CmdLine) exitHandler(args []string, writer io.Writer) error {
-	writer.Write([]byte("Goodbye!\r\n"))
-	return io.EOF
+func (c *CmdLine) exitHandler(args []string) string {
+	return "Goodbye!\r\n"
 }

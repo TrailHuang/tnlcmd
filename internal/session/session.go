@@ -278,12 +278,15 @@ func (s *Session) processCommand(cmd string) error {
 					return err
 				}
 
-				writer := bufio.NewWriter(s.conn)
-				err := node.Handler(args, writer)
-				writer.Flush()
+				result := node.Handler(args)
+				if result != "" {
+					// 规范化换行符，确保使用 \r\n
+					normalizedResult := normalizeLineEndings(result)
+					s.writerWrite(normalizedResult)
+				}
 
 				s.updateCommands()
-				return err
+				return nil
 			}
 
 			if s.context != nil && len(parts) == len(matchedPath) {
@@ -414,6 +417,20 @@ func (s *Session) UpdatePrompt(prompt string) {
 		s.writerWrite(s.prompt)
 		s.flushWriter()
 	}
+}
+
+// normalizeLineEndings 规范化换行符，确保使用 \r\n
+func normalizeLineEndings(text string) string {
+	// 如果已经是 \r\n，直接返回
+	if strings.Contains(text, "\r\n") && !strings.Contains(text, "\n") {
+		return text
+	}
+
+	// 替换 \n 为 \r\n，但避免重复替换 \r\n
+	result := strings.ReplaceAll(text, "\r\n", "\n")  // 先统一为 \n
+	result = strings.ReplaceAll(result, "\n", "\r\n") // 再替换为 \r\n
+
+	return result
 }
 
 // sendWelcomeMessage 发送欢迎消息

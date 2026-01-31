@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -28,7 +27,7 @@ func main() {
 	// 注册自定义命令
 	commands := []struct {
 		name, desc string
-		handler    func([]string, io.Writer) error
+		handler    func([]string) string
 	}{
 		{"echo", "Echo arguments", echoHandler},
 		{"time", "Show current time", timeHandler},
@@ -67,86 +66,76 @@ func main() {
 }
 
 // echoHandler 回声命令处理函数
-func echoHandler(args []string, writer io.Writer) error {
+func echoHandler(args []string) string {
 	if len(args) == 0 {
-		writer.Write([]byte("Usage: echo <message>\r\n"))
-		return nil
+		return "Usage: echo <message>\r\n"
 	}
 
 	message := fmt.Sprintf("Echo: %s\r\n", strings.Join(args, " "))
-	writer.Write([]byte(message))
-	return nil
+	return message
 }
 
 // timeHandler 时间命令处理函数
-func timeHandler(args []string, writer io.Writer) error {
+func timeHandler(args []string) string {
 	currentTime := time.Now().Format("2006-01-02 15:04:05")
 	message := fmt.Sprintf("Current time: %s\r\n", currentTime)
-	writer.Write([]byte(message))
-	return nil
+	return message
 }
 
 // statusHandler 状态命令处理函数
-func statusHandler(args []string, writer io.Writer) error {
+func statusHandler(args []string) string {
 	status := `Application Status:
   Version: 1.0.0
   Uptime:  Running
   Connections: Active
 `
-	writer.Write([]byte(status))
-	return nil
+	return status
 }
 
 // showTest1Handler 显示test1信息
-func showTest1Handler(args []string, writer io.Writer) error {
+func showTest1Handler(args []string) string {
 	message := fmt.Sprintf("Test1 Information:\r\n")
 	message += fmt.Sprintf("  Name: Test Configuration 1\r\n")
 	message += fmt.Sprintf("  Value: %s\r\n", strings.Join(args, " "))
-	writer.Write([]byte(message))
-	return nil
+	return message
 }
 
 // showTest2Handler 显示test2信息
-func showTest2Handler(args []string, writer io.Writer) error {
+func showTest2Handler(args []string) string {
 	message := fmt.Sprintf("Test2 Information:\r\n")
 	message += fmt.Sprintf("  Name: Test Configuration 2\r\n")
 	message += fmt.Sprintf("  Value: %s\r\n", strings.Join(args, " "))
-	writer.Write([]byte(message))
-	return nil
+	return message
 }
 
 // setTest3Handler 设置test3参数
-func setTest3Handler(args []string, writer io.Writer) error {
+func setTest3Handler(args []string) string {
 	if len(args) == 0 {
-		writer.Write([]byte("Usage: set test3 <value>\r\n"))
-		writer.Write([]byte("Example: set test3 50\r\n"))
-		return nil
+		return "Usage: set test3 <value>\r\n" +
+			"Example: set test3 50\r\n"
 	}
 
 	value := args[0]
 	message := fmt.Sprintf("Test3 parameter set to: %s\r\n", value)
-	writer.Write([]byte(message))
-	return nil
+	return message
 }
 
 // showTimeHandler 显示详细时间信息
-func showTimeHandler(args []string, writer io.Writer) error {
+func showTimeHandler(args []string) string {
 	currentTime := time.Now()
 	message := fmt.Sprintf("Detailed Time Information:\r\n")
 	message += fmt.Sprintf("  Time: %s\r\n", currentTime.Format("15:04:05"))
 	message += fmt.Sprintf("  Timezone: %s\r\n", currentTime.Format("MST"))
 	message += fmt.Sprintf("  Unix Timestamp: %d\r\n", currentTime.Unix())
-	writer.Write([]byte(message))
-	return nil
+	return message
 }
 
 // showDateHandler 显示当前日期
-func showDateHandler(args []string, writer io.Writer) error {
+func showDateHandler(args []string) string {
 	currentTime := time.Now()
 	message := fmt.Sprintf("Date Information:\r\n")
 	message += fmt.Sprintf("  Date: %s\r\n", currentTime.Format("2006-01-02"))
 	message += fmt.Sprintf("  Day of Week: %s\r\n", currentTime.Format("Monday"))
 	message += fmt.Sprintf("  Day of Year: %d\r\n", currentTime.YearDay())
-	writer.Write([]byte(message))
-	return nil
+	return message
 }

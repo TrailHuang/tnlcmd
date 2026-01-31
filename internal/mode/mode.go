@@ -2,7 +2,6 @@ package mode
 
 import (
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/TrailHuang/tnlcmd/internal/commandtree"
@@ -178,10 +177,9 @@ func (c *CommandContext) GetAvailableCommands() map[string]types.CommandInfo {
 
 // createModeChangeHandler 创建模式切换处理函数
 func (c *CommandContext) createModeChangeHandler(mode *CommandMode) types.CommandHandler {
-	return func(args []string, writer io.Writer) error {
+	return func(args []string) string {
 		c.ChangeMode(mode)
-		writer.Write([]byte(fmt.Sprintf("Entering %s mode\r\n", mode.Description)))
-		return nil
+		return fmt.Sprintf("Entering %s mode\r\n", mode.Description)
 	}
 }
 
@@ -196,31 +194,30 @@ func (c *CommandContext) getRootMode() *CommandMode {
 
 // createExitToRootHandler 创建退出到根模式处理函数
 func (c *CommandContext) createExitToRootHandler() types.CommandHandler {
-	return func(args []string, writer io.Writer) error {
+	return func(args []string) string {
 		// 找到根模式
 		root := c.getRootMode()
 		c.ChangeMode(root)
-		writer.Write([]byte("Exiting to privileged EXEC mode\r\n"))
-		return nil
+		return "Exiting to privileged EXEC mode\r\n"
 	}
 }
 
 // createCloseConnectionHandler 创建关闭连接处理函数
 func (c *CommandContext) createCloseConnectionHandler() types.CommandHandler {
-	return func(args []string, writer io.Writer) error {
-		writer.Write([]byte("Connection closed\r\n"))
-		return io.EOF
+	return func(args []string) string {
+		return "Connection closed\r\n"
 	}
 }
 
 // createHelpHandler 创建帮助命令处理函数
 func (c *CommandContext) createHelpHandler() types.CommandHandler {
-	return func(args []string, writer io.Writer) error {
+	return func(args []string) string {
+		var result strings.Builder
 		commands := c.GetAvailableCommands()
 
 		// 显示当前模式信息
-		writer.Write([]byte(fmt.Sprintf("Current mode: %s\r\n", c.CurrentMode.Description)))
-		writer.Write([]byte("Available commands:\r\n"))
+		result.WriteString(fmt.Sprintf("Current mode: %s\r\n", c.CurrentMode.Description))
+		result.WriteString("Available commands:\r\n")
 
 		// 显示所有可用命令
 		for name, cmd := range commands {
@@ -228,12 +225,12 @@ func (c *CommandContext) createHelpHandler() types.CommandHandler {
 			if name == "help" || name == "?" {
 				continue
 			}
-			writer.Write([]byte(fmt.Sprintf("  %-15s %s\r\n", name, cmd.Description)))
+			result.WriteString(fmt.Sprintf("  %-15s %s\r\n", name, cmd.Description))
 		}
 
 		// 显示内置命令
-		writer.Write([]byte("  help/?          Show this help message\r\n"))
+		result.WriteString("  help/?          Show this help message\r\n")
 
-		return nil
+		return result.String()
 	}
 }

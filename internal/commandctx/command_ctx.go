@@ -3,7 +3,7 @@ package commandctx
 
 import (
 	"fmt"
-	"io"
+	"strings"
 
 	"github.com/TrailHuang/tnlcmd/internal/commandtree"
 	"github.com/TrailHuang/tnlcmd/internal/mode"
@@ -101,57 +101,55 @@ func (c *CommandContext) GetAvailableCommands() map[string]types.CommandInfo {
 
 // createModeChangeHandler 创建模式切换处理函数
 func (c *CommandContext) createModeChangeHandler(mode *mode.CommandMode) types.CommandHandler {
-	return func(args []string, writer io.Writer) error {
+	return func(args []string) string {
 		c.ChangeMode(mode)
-		writer.Write([]byte(fmt.Sprintf("Entering %s mode\r\n", mode.Description)))
-		return nil
+		return fmt.Sprintf("Entering %s mode\r\n", mode.Description)
 	}
 }
 
 // createExitToRootHandler 创建退出到根模式处理函数
 func (c *CommandContext) createExitToRootHandler() types.CommandHandler {
-	return func(args []string, writer io.Writer) error {
+	return func(args []string) string {
 		// 找到根模式
 		root := c.GetRootMode()
 		c.ChangeMode(root)
-		writer.Write([]byte("Exiting to privileged EXEC mode\r\n"))
-		return nil
+		return "Exiting to privileged EXEC mode\r\n"
 	}
 }
 
 // createCloseConnectionHandler 创建关闭连接处理函数
 func (c *CommandContext) createCloseConnectionHandler() types.CommandHandler {
-	return func(args []string, writer io.Writer) error {
-		writer.Write([]byte("Connection closed\r\n"))
-		return io.EOF
+	return func(args []string) string {
+		return "Connection closed\r\n"
 	}
 }
 
 // createHelpHandler 创建帮助命令处理函数
 func (c *CommandContext) createHelpHandler() types.CommandHandler {
-	return func(args []string, writer io.Writer) error {
+	return func(args []string) string {
+		var result strings.Builder
 		commands := c.GetAvailableCommands()
 
 		// 显示当前模式信息
-		writer.Write([]byte(fmt.Sprintf("Current mode: %s\r\n", c.CurrentMode.Description)))
-		writer.Write([]byte("Available commands:\r\n"))
+		result.WriteString(fmt.Sprintf("Current mode: %s\r\n", c.CurrentMode.Description))
+		result.WriteString("Available commands:\r\n")
 
 		// 显示所有可用命令
 		for name, cmd := range commands {
-			writer.Write([]byte(fmt.Sprintf("  %-20s %s\r\n", name, cmd.Description)))
+			result.WriteString(fmt.Sprintf("  %-20s %s\r\n", name, cmd.Description))
 		}
 
-		return nil
+		return result.String()
 	}
 }
 
 // createExitModeHandler 创建退出模式处理函数
 func (c *CommandContext) createExitModeHandler() types.CommandHandler {
-	return func(args []string, writer io.Writer) error {
+	return func(args []string) string {
 		if c.CurrentMode.Parent != nil {
 			c.ChangeMode(c.CurrentMode.Parent)
-			writer.Write([]byte(fmt.Sprintf("Exiting to %s mode\r\n", c.CurrentMode.Description)))
+			return fmt.Sprintf("Exiting to %s mode\r\n", c.CurrentMode.Description)
 		}
-		return nil
+		return ""
 	}
 }

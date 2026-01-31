@@ -4,8 +4,8 @@ package tnlcmd
 
 import (
 	"fmt"
-	"io"
 	"log"
+	"strings"
 
 	"github.com/TrailHuang/tnlcmd/internal/cmdline"
 	"github.com/TrailHuang/tnlcmd/pkg/types"
@@ -78,17 +78,17 @@ func SimpleExample() {
 	cmdline := NewCmdLine(config)
 
 	// 注册一些基本命令
-	cmdline.RegisterCommand("help", "Show help information", func(args []string, writer io.Writer) error {
-		fmt.Fprintf(writer, "Available commands:\r\n")
-		fmt.Fprintf(writer, "  help    - Show this help\r\n")
-		fmt.Fprintf(writer, "  version - Show version\r\n")
-		fmt.Fprintf(writer, "  exit    - Exit the program\r\n")
-		return nil
+	cmdline.RegisterCommand("help", "Show help information", func(args []string) string {
+		var result strings.Builder
+		result.WriteString("Available commands:\n")
+		result.WriteString("  help    - Show this help\n")
+		result.WriteString("  version - Show version\n")
+		result.WriteString("  exit    - Exit the program\n")
+		return result.String()
 	})
 
-	cmdline.RegisterCommand("version", "Show version information", func(args []string, writer io.Writer) error {
-		fmt.Fprintf(writer, "TNLCMD v1.0.0\r\n")
-		return nil
+	cmdline.RegisterCommand("version", "Show version information", func(args []string) string {
+		return "TNLCMD v1.0.0\n"
 	})
 
 	// 启动服务
