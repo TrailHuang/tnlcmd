@@ -23,28 +23,12 @@
 go build -o cmdline
 ```
 
-### 运行服务器
-
-```bash
-# 默认端口 2323
-./cmdline
-
-# 指定端口和主机
-./cmdline -port 8080 -host 127.0.0.1
-```
-
 ### 连接测试
 
 使用 telnet 客户端连接：
 
 ```bash
 telnet localhost 2323
-```
-
-或者使用内置的测试客户端：
-
-```bash
-go run test_client.go localhost:2323
 ```
 
 ## 默认命令
@@ -101,15 +85,6 @@ cmdline.RegisterCommand("show running-config", "Show running system information"
 - 叶子节点保留原有描述："Show running system information"
 
 ### 改进的命令补全显示
-
-命令补全现在显示格式化的命令名称和描述：
-
-```
-show                            - show configuration
-ping                            - send echo
-debug                           - debug mode
-configure                       - Switch to configure mode
-```
 
 **特点**：
 - 命令名称固定32宽度左对齐
