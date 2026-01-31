@@ -5,12 +5,15 @@
 ## 功能特性
 
 - ✅ **Telnet 服务器**: 支持多客户端并发连接
-- ✅ **Tab 补全**: 支持命令自动补全
+- ✅ **Tab 补全**: 支持命令自动补全，显示命令名称和描述
 - ✅ **历史命令**: 支持命令历史记录和浏览
 - ✅ **上下翻页**: 支持使用上下箭头键浏览历史命令
 - ✅ **命令行编辑**: 支持左右箭头移动光标、退格删除
 - ✅ **优雅关闭**: 支持信号处理和优雅关闭
 - ✅ **并发安全**: 支持多客户端并发访问
+- ✅ **多行描述**: 支持为命令路径的每个层级提供详细描述
+- ✅ **参数验证**: 支持多种参数类型验证（枚举、范围、字符串、可选参数）
+- ✅ **命令树**: 支持复杂的多级命令结构
 
 ## 编译和运行
 
@@ -97,6 +100,51 @@ cmdline/
 - 使用 `golang.org/x/term` 处理终端原始模式
 - 支持 ANSI 转义序列进行光标控制
 - 实现完整的命令行编辑功能
+
+## 新增功能
+
+### 多行描述支持
+
+现在可以为复杂的多级命令路径提供详细的层级描述：
+
+```go
+// 注册命令时提供多行描述
+cmdline.RegisterCommand("show running-config", "Show running system information", handler,
+    "show configuration\ndisplay running config")
+```
+
+**效果**：
+- `show` 节点的描述："show configuration"
+- `running-config` 节点的描述："display running config"
+- 叶子节点保留原有描述："Show running system information"
+
+### 改进的命令补全显示
+
+命令补全现在显示格式化的命令名称和描述：
+
+```
+show                            - show configuration
+ping                            - send echo
+debug                           - debug mode
+configure                       - Switch to configure mode
+```
+
+**特点**：
+- 命令名称固定32宽度左对齐
+- 清晰的描述信息
+- 专业的显示格式
+
+### 参数类型支持
+
+支持多种参数类型验证：
+- **枚举参数**：如 `(on|off)`
+- **范围参数**：如 `<1-10>`
+- **字符串参数**：如 `STRING`
+- **可选参数**：如 `[OPTIONAL]`
+
+### 参数统计逻辑优化
+
+修复了参数统计逻辑，现在正确地从当前节点向根节点回溯统计参数数量。
 
 ## 性能优化
 
