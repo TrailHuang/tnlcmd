@@ -591,9 +591,7 @@ func IsParameterMatch(node *CommandNode, input string) bool {
 	// 检查常见的参数类型模式
 	switch node.Type {
 	case NodeTypeNum: // 范围参数，如 <1-10>
-		if isNumber(input) {
-			return true
-		}
+		return isValidNumberInRange(node, input)
 	case NodeTypeEnum: // 枚举参数，如 (on|off)
 		return isValidEnumValue(node, input)
 	case NodeTypeString:
@@ -607,9 +605,96 @@ func IsParameterMatch(node *CommandNode, input string) bool {
 	return false
 }
 
-func isNumber(str string) bool {
-	_, err := strconv.Atoi(str)
-	return err == nil
+// isValidNumberInRange 检查数字参数值是否在指定范围内
+func isValidNumberInRange(node *CommandNode, input string) bool {
+	// 首先检查是否是有效数字
+	num, err := strconv.Atoi(input)
+	if err != nil {
+		return false
+	}
+
+	// 从节点描述中提取范围信息
+	// 范围参数格式如: <1-10> 或 [1-100]
+	min, max := extractNumberRange(node.Name)
+
+	// 如果没有指定范围，接受任何有效数字
+	if min == 0 && max == 0 {
+		return true
+	}
+
+	// 检查数字是否在指定范围内
+	return num >= min && num <= max
+}
+
+// extractNumberRange 从描述中提取数字范围
+func extractNumberRange(Name string) (int, int) {
+	// 范围通常用尖括号或方括号括起来，如 <1-10> 或 [1-100]
+	re := regexp.MustCompile(`[<\[](\d+)-(\d+)[>\]]`)
+	matches := re.FindStringSubmatch(Name)
+	if len(matches) == 3 {
+		min, err1 := strconv.Atoi(matches[1])
+		max, err2 := strconv.Atoi(matches[2])
+		if err1 == nil && err2 == nil {
+			return min, max
+		}
+	}
+
+	// 如果没有找到范围，返回0表示无范围限制
+	return 0, 0
+}
+
+// GetNumberValidationError 获取数字参数验证错误信息
+func GetNumberValidationError(node *CommandNode, input string) string {
+	// 首先检查是否是有效数字
+	num, err := strconv.Atoi(input)
+	if err != nil {
+		return fmt.Sprintf("无效的数字格式: '%s'", input)
+	}
+
+	// 从节点描述中提取范围信息
+	min, max := extractNumberRange(node.Name)
+
+	// 如果没有指定范围，接受任何有效数字
+	if min == 0 && max == 0 {
+		return ""
+	}
+
+	// 检查数字是否在指定范围内
+	if num >= min && num <= max {
+		return ""
+	}
+
+	// 生成错误消息
+	if num < min {
+		return fmt.Sprintf("数字太小: %d，有效范围: %d-%d", num, min, max)
+	}
+	if num > max {
+		return fmt.Sprintf("数字太大: %d，有效范围: %d-%d", num, min, max)
+	}
+
+	return fmt.Sprintf("数字 %d 超出有效范围: %d-%d", num, min, max)
+}
+
+// GetNumberCompletions 获取数字参数的补全选项
+func GetNumberCompletions(node *CommandNode, input string) []string {
+	// 数字参数通常不需要补全，但可以显示范围提示
+	min, max := extractNumberRange(node.Description)
+	if min == 0 && max == 0 {
+		return nil
+	}
+
+	// 如果输入为空，显示范围提示
+	if len(input) == 0 {
+		return []string{fmt.Sprintf("<范围: %d-%d>", min, max)}
+	}
+
+	// 检查输入是否为部分数字
+	if _, err := strconv.Atoi(input); err == nil {
+		// 输入已经是有效数字，不需要补全
+		return nil
+	}
+
+	return nil
 }
 
 func isString(str string) bool {
@@ -620,7 +705,7 @@ func isString(str string) bool {
 func isValidEnumValue(node *CommandNode, input string) bool {
 	// 从节点描述中提取枚举值
 	// 枚举参数格式如: (on|off|enable|disable)
-	enumValues := extractEnumValues(node.Description)
+	enumValues := extractEnumValues(node.Name)
 	if len(enumValues) == 0 {
 		// 如果没有明确的枚举值定义，接受任何输入
 		return true
@@ -630,15 +715,6 @@ func isValidEnumValue(node *CommandNode, input string) bool {
 	for _, value := range enumValues {
 		if strings.EqualFold(value, input) {
 			return true
-		}
-	}
-
-	// 如果输入不在枚举值列表中，检查是否为部分匹配（用于补全）
-	if len(input) > 0 {
-		for _, value := range enumValues {
-			if strings.HasPrefix(strings.ToLower(value), strings.ToLower(input)) {
-				return true
-			}
 		}
 	}
 
@@ -669,7 +745,7 @@ func extractEnumValues(description string) []string {
 
 // GetEnumValidationError 获取枚举参数验证错误信息
 func GetEnumValidationError(node *CommandNode, input string) string {
-	enumValues := extractEnumValues(node.Description)
+	enumValues := extractEnumValues(node.Name)
 	if len(enumValues) == 0 {
 		return ""
 	}
@@ -701,7 +777,7 @@ func GetEnumValidationError(node *CommandNode, input string) string {
 
 // GetEnumCompletions 获取枚举参数的补全选项
 func GetEnumCompletions(node *CommandNode, input string) []string {
-	enumValues := extractEnumValues(node.Description)
+	enumValues := extractEnumValues(node.Name)
 	if len(enumValues) == 0 {
 		return nil
 	}
@@ -714,33 +790,4 @@ func GetEnumCompletions(node *CommandNode, input string) []string {
 	}
 
 	return completions
-}
-
-// isValidIPAddress 检查是否为有效的IP地址
-func isValidIPAddress(ip string) bool {
-	// 简单的IP地址验证
-	parts := strings.Split(ip, ".")
-	if len(parts) != 4 {
-		return false
-	}
-	for _, part := range parts {
-		if num, err := strconv.Atoi(part); err != nil || num < 0 || num > 255 {
-			return false
-		}
-	}
-	return true
-}
-
-func isValidIPv6Address(ip string) bool {
-	// 简单的IPv6地址验证
-	parts := strings.Split(ip, ":")
-	if len(parts) != 8 {
-		return false
-	}
-	for _, part := range parts {
-		if num, err := strconv.ParseUint(part, 16, 16); err != nil || num < 0 || num > 0xFFFF {
-			return false
-		}
-	}
-	return true
 }

@@ -303,17 +303,19 @@ func (s *Session) processCommand(cmd string) error {
 	return nil
 }
 
-// validateCommandParameters 验证命令参数数量是否正确
+// validateCommandParameters 验证命令参数数量和值是否正确
 func (s *Session) validateCommandParameters(node *commandtree.CommandNode, matchedPath []string, args []string) error {
 	// 计算命令需要的参数数量
 	requiredParams := 0
 	optionalParams := 0
 
-	// 从当前节点往根节点方向回溯，统计路径上的参数
+	// 收集路径上的所有参数节点
+	var paramNodes []*commandtree.CommandNode
 	current := node
 	for current != nil {
 		if current.Type != types.NodeTypeCommand {
 			// 参数节点
+			paramNodes = append([]*commandtree.CommandNode{current}, paramNodes...) // 插入到开头，保持顺序
 			if current.IsRequired {
 				requiredParams++
 			} else {
@@ -337,7 +339,35 @@ func (s *Session) validateCommandParameters(node *commandtree.CommandNode, match
 		return fmt.Errorf("too many arguments")
 	}
 
+	// 验证参数值的合法性
+	for i, arg := range args {
+		if i < len(paramNodes) {
+			paramNode := paramNodes[i]
+
+			// 使用参数验证函数检查参数值
+			if !commandtree.IsParameterMatch(paramNode, arg) {
+				// 获取具体的验证错误信息
+				errorMsg := s.getParameterValidationError(paramNode, arg)
+				s.writerWrite(fmt.Sprintf("Error: Invalid parameter value for command '%s'\r\n", strings.Join(matchedPath, " ")))
+				s.writerWrite(fmt.Sprintf("Parameter %d: %s\r\n", i+1, errorMsg))
+				return fmt.Errorf("invalid parameter value")
+			}
+		}
+	}
+
 	return nil
+}
+
+// getParameterValidationError 获取参数验证错误信息
+func (s *Session) getParameterValidationError(node *commandtree.CommandNode, input string) string {
+	switch node.Type {
+	case types.NodeTypeEnum:
+		return commandtree.GetEnumValidationError(node, input)
+	case types.NodeTypeNum:
+		return commandtree.GetNumberValidationError(node, input)
+	default:
+		return fmt.Sprintf("无效的参数值: '%s'", input)
+	}
 }
 
 // redrawLine 重绘当前行
