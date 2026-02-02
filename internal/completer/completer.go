@@ -4,15 +4,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/TrailHuang/tnlcmd/internal/commandctx"
 	"github.com/TrailHuang/tnlcmd/internal/commandtree"
+	"github.com/TrailHuang/tnlcmd/internal/mode"
 	"github.com/TrailHuang/tnlcmd/pkg/types"
 )
 
 // CommandCompleter 命令补全器
 type CommandCompleter struct {
-	commandTree *commandtree.CommandTree   // 树形命令存储（向后兼容）
-	context     *commandctx.CommandContext // 命令上下文，用于访问当前视图的独立命令树
+	commandTree *commandtree.CommandTree // 树形命令存储（向后兼容）
+	context     *mode.CommandContext     // 命令上下文，用于访问当前视图的独立命令树
 }
 
 // NewCommandCompleter 创建新的命令补全器
@@ -27,15 +27,15 @@ func NewCommandCompleterWithTree(tree *commandtree.CommandTree) *CommandComplete
 	}
 }
 
-// NewCommandCompleterWithContext 创建带上下文的补全器
-func NewCommandCompleterWithContext(context *commandctx.CommandContext) *CommandCompleter {
+// NewCommandCompleterWithContext 使用上下文创建新的命令补全器
+func NewCommandCompleterWithContext(context *mode.CommandContext) *CommandCompleter {
 	return &CommandCompleter{
 		context: context,
 	}
 }
 
-// UpdateContext 更新补全器的上下文
-func (c *CommandCompleter) UpdateContext(context *commandctx.CommandContext) {
+// UpdateContext 更新命令上下文
+func (c *CommandCompleter) UpdateContext(context *mode.CommandContext) {
 	c.context = context
 }
 

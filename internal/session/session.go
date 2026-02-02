@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/TrailHuang/tnlcmd/internal/commandctx"
 	"github.com/TrailHuang/tnlcmd/internal/commandtree"
 	"github.com/TrailHuang/tnlcmd/internal/completer"
 	"github.com/TrailHuang/tnlcmd/internal/history"
@@ -29,14 +28,14 @@ type Session struct {
 	isClosed   bool
 	history    *history.CommandHistory
 	completer  *completer.CommandCompleter
-	context    *commandctx.CommandContext
+	context    *mode.CommandContext
 	prompt     string
 }
 
 // NewSession 创建新的会话
 func NewSession(conn net.Conn, config *types.Config, commands map[string]types.CommandInfo) *Session {
 	// 创建命令上下文
-	context := &commandctx.CommandContext{
+	context := &mode.CommandContext{
 		CurrentMode: config.RootMode.(*mode.CommandMode),
 	}
 
@@ -58,7 +57,7 @@ func NewSession(conn net.Conn, config *types.Config, commands map[string]types.C
 }
 
 // NewSessionWithContext 使用现有上下文创建新的会话
-func NewSessionWithContext(conn net.Conn, config *types.Config, context *commandctx.CommandContext) *Session {
+func NewSessionWithContext(conn net.Conn, config *types.Config, context *mode.CommandContext) *Session {
 	s := &Session{
 		conn:       conn,
 		config:     config,

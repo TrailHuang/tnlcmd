@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/TrailHuang/tnlcmd/internal/commandctx"
 	"github.com/TrailHuang/tnlcmd/internal/commandtree"
 	"github.com/TrailHuang/tnlcmd/internal/mode"
 	"github.com/TrailHuang/tnlcmd/internal/server"
@@ -30,7 +29,7 @@ type CmdLine struct {
 	server      *server.TelnetServer
 	isRunning   bool
 	rootMode    *mode.CommandMode
-	context     *commandctx.CommandContext
+	context     *mode.CommandContext
 }
 
 // NewCmdLine 创建新的命令行接口
@@ -54,7 +53,7 @@ func NewCmdLine(config *Config) *CmdLine {
 	commandTree := commandtree.NewCommandTree()
 
 	// 创建命令上下文
-	context := &commandctx.CommandContext{
+	context := &mode.CommandContext{
 		CurrentMode: rootMode,
 		Path:        []string{},
 	}

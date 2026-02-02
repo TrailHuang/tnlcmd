@@ -7,7 +7,6 @@ import (
 	"net"
 	"sync"
 
-	"github.com/TrailHuang/tnlcmd/internal/commandctx"
 	"github.com/TrailHuang/tnlcmd/internal/commandtree"
 	"github.com/TrailHuang/tnlcmd/internal/mode"
 	"github.com/TrailHuang/tnlcmd/internal/session"
@@ -19,7 +18,7 @@ type TelnetServer struct {
 	config      *types.Config
 	commands    map[string]types.CommandInfo
 	commandTree *commandtree.CommandTree
-	context     *commandctx.CommandContext
+	context     *mode.CommandContext
 	listener    net.Listener
 	sessions    map[net.Conn]*session.Session
 	mu          sync.RWMutex
@@ -41,7 +40,7 @@ func NewTelnetServer(config *types.Config, commands map[string]types.CommandInfo
 }
 
 // NewTelnetServerWithContext 创建带上下文的telnet服务器
-func NewTelnetServerWithContext(config *types.Config, commandctx *commandctx.CommandContext) *TelnetServer {
+func NewTelnetServerWithContext(config *types.Config, commandctx *mode.CommandContext) *TelnetServer {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &TelnetServer{
@@ -115,10 +114,10 @@ func (ts *TelnetServer) acceptConnections() {
 // handleConnection 处理连接
 func (ts *TelnetServer) handleConnection(conn net.Conn) {
 	// 使用服务器中的上下文（如果可用）
-	var context *commandctx.CommandContext
+	var context *mode.CommandContext
 	if ts.context != nil {
 		// 复制上下文，但每个连接使用独立的实例
-		context = &commandctx.CommandContext{
+		context = &mode.CommandContext{
 			CurrentMode: ts.context.CurrentMode,
 			Path:        make([]string, len(ts.context.Path)),
 			CommandTree: ts.context.CommandTree,
@@ -126,7 +125,7 @@ func (ts *TelnetServer) handleConnection(conn net.Conn) {
 		copy(context.Path, ts.context.Path)
 	} else {
 		// 向后兼容：创建新的上下文
-		context = &commandctx.CommandContext{
+		context = &mode.CommandContext{
 			CurrentMode: ts.config.RootMode.(*mode.CommandMode),
 			Path:        []string{},
 		}
