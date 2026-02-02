@@ -104,8 +104,8 @@ func (c *CmdLine) findOrCreateMode(modePath string, description string) *mode.Co
 	_ = c.commandTree.AddModeCommand(modeName, fmt.Sprintf("Enter %s configuration mode B", description))
 
 	// 添加退出命令
-	subMode.AddCommand("exit", "Exit and close connection", c.context.CreateCloseConnectionHandler())
-	subMode.AddCommand("quit", "Exit to previous mode", c.context.CreateExitToRootHandler())
+	subMode.AddCommand("exit", "Exit and close connection", c.CreateCloseConnectionHandler())
+	subMode.AddCommand("quit", "Exit to previous mode", c.CreateExitToRootHandler())
 
 	return subMode
 }
@@ -209,12 +209,28 @@ func (c *CmdLine) Stop() error {
 	return nil
 }
 
+// CreateExitToRootHandler 创建退出到根模式处理函数
+func (c *CmdLine) CreateExitToRootHandler() types.CommandHandler {
+	return func(args []string) string {
+		// 返回特殊标记，让会话层知道需要更新模式状态
+		return "__EXIT_TO_ROOT__"
+	}
+}
+
+// CreateCloseConnectionHandler 创建关闭连接处理函数
+func (c *CmdLine) CreateCloseConnectionHandler() types.CommandHandler {
+	return func(args []string) string {
+		// 返回特殊标记，让会话层处理退出逻辑
+		return "__EXIT__"
+	}
+}
+
 // registerBuiltinCommands 注册内置命令
 func (c *CmdLine) registerBuiltinCommands() {
 	fmt.Printf("Starting to register builtin commands...\n")
 
 	// 添加退出命令
-	c.RegisterCommand("exit", "Exit and close connection", c.context.CreateCloseConnectionHandler())
-	c.RegisterCommand("quit", "Exit to previous mode", c.context.CreateCloseConnectionHandler())
+	c.RegisterCommand("exit", "Exit and close connection", c.CreateCloseConnectionHandler())
+	c.RegisterCommand("quit", "Exit to previous mode", c.CreateCloseConnectionHandler())
 	fmt.Printf("Builtin commands registration completed\n")
 }

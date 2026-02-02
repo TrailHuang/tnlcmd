@@ -73,19 +73,3 @@ func (c *CommandContext) createModeChangeHandler(mode *mode.CommandMode) types.C
 		return fmt.Sprintf("Entering %s mode\r\n", mode.Description)
 	}
 }
-
-// CreateExitToRootHandler 创建退出到根模式处理函数
-func (c *CommandContext) CreateExitToRootHandler() types.CommandHandler {
-	return func(args []string) string {
-		// 返回特殊标记，让会话层知道需要更新模式状态
-		return "__EXIT_TO_ROOT__"
-	}
-}
-
-// CreateCloseConnectionHandler 创建关闭连接处理函数
-func (c *CommandContext) CreateCloseConnectionHandler() types.CommandHandler {
-	return func(args []string) string {
-		// 返回特殊标记，让会话层处理退出逻辑
-		return "__EXIT__"
-	}
-}
