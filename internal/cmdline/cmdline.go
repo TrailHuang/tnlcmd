@@ -2,9 +2,7 @@ package cmdline
 
 import (
 	"fmt"
-	"io"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/TrailHuang/tnlcmd/internal/commandctx"
@@ -103,7 +101,11 @@ func (c *CmdLine) findOrCreateMode(modePath string, description string) *mode.Co
 	currentMode.AddSubMode(subMode)
 
 	// 同时添加到命令树，使用专门的视图切换命令方法
-	_ = c.commandTree.AddModeCommand(modeName, fmt.Sprintf("Enter %s configuration mode", description))
+	_ = c.commandTree.AddModeCommand(modeName, fmt.Sprintf("Enter %s configuration mode B", description))
+
+	// 添加退出命令
+	subMode.AddCommand("exit", "Exit and close connection", c.context.CreateCloseConnectionHandler())
+	subMode.AddCommand("quit", "Exit to previous mode", c.context.CreateExitToRootHandler())
 
 	return subMode
 }
@@ -211,82 +213,8 @@ func (c *CmdLine) Stop() error {
 func (c *CmdLine) registerBuiltinCommands() {
 	fmt.Printf("Starting to register builtin commands...\n")
 
-	// 在所有模式下注册内置命令
-	builtinCommands := []struct {
-		name, desc string
-		handler    CommandHandler
-	}{
-		{"exit", "Exit the session", c.exitHandler},
-		{"quit", "Exit the session", c.exitHandler},
-	}
-
-	// 注册到根模式（向后兼容）
-	for _, cmd := range builtinCommands {
-		c.rootMode.AddCommand(cmd.name, cmd.desc, cmd.handler)
-	}
-
-	// 注册到全局命令树
-	for _, cmd := range builtinCommands {
-		err := c.commandTree.AddCommand(cmd.name, cmd.desc, cmd.handler)
-		if err != nil {
-			fmt.Printf("Warning: Failed to add command %s to tree: %v\n", cmd.name, err)
-		}
-	}
-
+	// 添加退出命令
+	c.RegisterCommand("exit", "Exit and close connection", c.context.CreateCloseConnectionHandler())
+	c.RegisterCommand("quit", "Exit to previous mode", c.context.CreateCloseConnectionHandler())
 	fmt.Printf("Builtin commands registration completed\n")
-}
-
-// helpHandler 帮助命令处理函数
-func (c *CmdLine) helpHandler(args []string) string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	var result strings.Builder
-
-	// 使用当前会话的上下文获取可用命令（如果可用）
-	var commands map[string]CommandInfo
-	if c.context != nil && c.context.CurrentMode != nil {
-		commands = c.context.GetAvailableCommands()
-	} else {
-		// 向后兼容：使用全局上下文
-		commands = c.commands
-	}
-
-	result.WriteString("Available commands:\r\n")
-	for name, cmd := range commands {
-		// 跳过内置命令的重复显示
-		if name == "help" || name == "?" {
-			continue
-		}
-		result.WriteString(fmt.Sprintf("  %-15s - %s\r\n", name, cmd.Description))
-	}
-
-	// 显示内置命令
-	result.WriteString("  help/?          - Show this help message\r\n")
-
-	return result.String()
-}
-
-// setHandler set命令处理函数
-func (c *CmdLine) setHandler(args []string, writer io.Writer) error {
-	if len(args) < 2 {
-		writer.Write([]byte("Usage: set <key> <value>\r\n"))
-		writer.Write([]byte("Available keys: prompt, welcome\r\n"))
-		return nil
-	}
-
-	err := c.SetConfig(args[0], args[1])
-	if err != nil {
-		writer.Write([]byte(fmt.Sprintf("Error: %s\r\n", err.Error())))
-		return err
-	}
-
-	writer.Write([]byte("Configuration updated successfully\r\n"))
-	return nil
-}
-
-// exitHandler 退出命令处理函数
-func (c *CmdLine) exitHandler(args []string) string {
-	// 返回特殊标记，让会话层处理退出逻辑
-	return "__EXIT__"
 }

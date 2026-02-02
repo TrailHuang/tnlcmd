@@ -21,6 +21,7 @@ const (
 	NodeTypeNum                               // 数值范围节点 <>
 	NodeTypeString                            // 字符串参数节点（大写字母）
 	NodeTypeModeSwitch                        // 视图切换节点
+	NodeTypeExit                              // 退出节点
 )
 
 // Config 命令行配置

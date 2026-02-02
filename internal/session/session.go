@@ -287,6 +287,15 @@ func (s *Session) processCommand(cmd string) error {
 						return io.EOF
 					}
 
+					// 检查是否为退出到根模式的特殊标记
+					if result == "__EXIT_TO_ROOT__" {
+						s.writerWrite("Exiting to privileged EXEC mode\r\n")
+						rootMode := s.context.GetRootMode()
+						s.context.ChangeMode(rootMode)
+						s.updateCommands()
+						return nil
+					}
+
 					// 规范化换行符，确保使用 \r\n
 					normalizedResult := normalizeLineEndings(result)
 					s.writerWrite(normalizedResult)
