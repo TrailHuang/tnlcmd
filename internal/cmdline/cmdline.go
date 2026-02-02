@@ -287,5 +287,6 @@ func (c *CmdLine) setHandler(args []string, writer io.Writer) error {
 
 // exitHandler 退出命令处理函数
 func (c *CmdLine) exitHandler(args []string) string {
-	return "Goodbye!\r\n"
+	// 返回特殊标记，让会话层处理退出逻辑
+	return "__EXIT__"
 }

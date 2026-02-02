@@ -205,7 +205,8 @@ func (c *CommandContext) createExitToRootHandler() types.CommandHandler {
 // createCloseConnectionHandler 创建关闭连接处理函数
 func (c *CommandContext) createCloseConnectionHandler() types.CommandHandler {
 	return func(args []string) string {
-		return "Connection closed\r\n"
+		// 返回特殊标记，让会话层处理退出逻辑
+		return "__EXIT__"
 	}
 }
 

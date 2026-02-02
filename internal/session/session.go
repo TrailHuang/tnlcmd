@@ -280,6 +280,13 @@ func (s *Session) processCommand(cmd string) error {
 
 				result := node.Handler(args)
 				if result != "" {
+					// 检查是否为退出命令的特殊标记
+					if result == "__EXIT__" {
+						s.writerWrite("Goodbye!\r\n")
+						s.flushWriter()
+						return io.EOF
+					}
+
 					// 规范化换行符，确保使用 \r\n
 					normalizedResult := normalizeLineEndings(result)
 					s.writerWrite(normalizedResult)
