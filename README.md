@@ -20,7 +20,8 @@
 ### 编译程序
 
 ```bash
-go build -o cmdline
+go build ./cmd/zebra_example
+go build ./examples/example
 ```
 
 ### 连接测试
