@@ -132,6 +132,9 @@ func (s *Session) Handle(ctx context.Context) error {
 
 // readLine 读取一行输入
 func (s *Session) readLine() (string, error) {
+	// 每次读取前重置超时时间
+	s.conn.SetReadDeadline(time.Now().Add(10 * time.Minute))
+	
 	reader := bufio.NewReader(s.conn)
 
 	var buffer strings.Builder
@@ -141,9 +144,11 @@ func (s *Session) readLine() (string, error) {
 	s.writerWrite(s.prompt)
 	s.flushWriter()
 
+	// 提前分配好缓冲区，避免每次循环都分配内存
+	data := make([]byte, 1024)
+
 	for {
 		// 使用缓冲区读取，更好地处理telnet协议
-		data := make([]byte, 1024)
 		n, err := reader.Read(data)
 		if err != nil {
 			return "", err

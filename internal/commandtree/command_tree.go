@@ -626,11 +626,18 @@ func isValidNumberInRange(node *CommandNode, input string) bool {
 	return num >= min && num <= max
 }
 
+// 预编译正则表达式以提高性能
+var (
+	// 匹配范围参数，如 <1-10> 或 [1-100]
+	rangeRegex = regexp.MustCompile(`[<\[](\d+)-(\d+)[>\]]`)
+	// 匹配括号内的枚举值
+	enumValuesRegex = regexp.MustCompile(`[\(\[](.*?)[\)\]]`)
+)
+
 // extractNumberRange 从描述中提取数字范围
 func extractNumberRange(Name string) (int, int) {
 	// 范围通常用尖括号或方括号括起来，如 <1-10> 或 [1-100]
-	re := regexp.MustCompile(`[<\[](\d+)-(\d+)[>\]]`)
-	matches := re.FindStringSubmatch(Name)
+	matches := rangeRegex.FindStringSubmatch(Name)
 	if len(matches) == 3 {
 		min, err1 := strconv.Atoi(matches[1])
 		max, err2 := strconv.Atoi(matches[2])
@@ -727,8 +734,7 @@ func extractEnumValues(description string) []string {
 	var enumValues []string
 
 	// 匹配括号内的枚举值
-	re := regexp.MustCompile(`[\(\[](.*?)[\)\]]`)
-	matches := re.FindStringSubmatch(description)
+	matches := enumValuesRegex.FindStringSubmatch(description)
 	if len(matches) > 1 {
 		// 分割枚举值
 		values := strings.Split(matches[1], "|")
