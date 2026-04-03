@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -22,7 +22,6 @@ import (
 type Session struct {
 	conn       net.Conn
 	config     *types.Config
-	commands   map[string]types.CommandInfo
 	mu         sync.RWMutex
 	lastActive time.Time
 	isClosed   bool
@@ -33,7 +32,7 @@ type Session struct {
 }
 
 // NewSession 创建新的会话
-func NewSession(conn net.Conn, config *types.Config, commands map[string]types.CommandInfo) *Session {
+func NewSession(conn net.Conn, config *types.Config) *Session {
 	// 创建命令上下文
 	context := &mode.CommandContext{
 		CurrentMode: config.RootMode.(*mode.CommandMode),
@@ -42,7 +41,6 @@ func NewSession(conn net.Conn, config *types.Config, commands map[string]types.C
 	s := &Session{
 		conn:     conn,
 		config:   config,
-		commands: commands,
 		context:  context,
 		prompt:   config.Prompt,
 	}
@@ -81,12 +79,10 @@ func NewSessionWithContext(conn net.Conn, config *types.Config, context *mode.Co
 // updateCommands 更新当前可用的命令列表
 func (s *Session) updateCommands() {
 	if s.context != nil {
-		s.commands = s.context.GetAvailableCommands()
 		s.prompt = s.context.CurrentMode.Prompt
 		// 更新补全器的上下文（不再需要更新命令树，因为补全器使用上下文）
 		s.completer.UpdateContext(s.context)
 	} else {
-		s.commands = make(map[string]types.CommandInfo)
 		s.prompt = s.config.Prompt
 	}
 }
@@ -125,13 +121,16 @@ func (s *Session) Handle(ctx context.Context) error {
 		}
 		if err != nil {
 			// 参数验证错误等非致命错误，只记录日志，不关闭连接
-			log.Printf("Command execution error: %v", err)
+			slog.Error("command error", "err", fmt.Sprintf("Command execution error: %v", err))
 		}
 	}
 }
 
 // readLine 读取一行输入
 func (s *Session) readLine() (string, error) {
+	// 每次读取前重置超时时间
+	s.conn.SetReadDeadline(time.Now().Add(10 * time.Minute))
+
 	reader := bufio.NewReader(s.conn)
 
 	var buffer strings.Builder
@@ -141,9 +140,11 @@ func (s *Session) readLine() (string, error) {
 	s.writerWrite(s.prompt)
 	s.flushWriter()
 
+	// 提前分配好缓冲区，避免每次循环都分配内存
+	data := make([]byte, 1024)
+
 	for {
 		// 使用缓冲区读取，更好地处理telnet协议
-		data := make([]byte, 1024)
 		n, err := reader.Read(data)
 		if err != nil {
 			return "", err

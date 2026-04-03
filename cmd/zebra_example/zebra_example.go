@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -106,7 +107,7 @@ func main() {
 		log.Fatalf("Failed to start cmdline: %v", err)
 	}
 
-	fmt.Printf("Zebra-style CLI started on port %d\n", config.Port)
+	slog.Info(fmt.Sprintf("Zebra-style CLI started on port %d\n", config.Port))
 
 	// 等待中断信号
 	sigChan := make(chan os.Signal, 1)
