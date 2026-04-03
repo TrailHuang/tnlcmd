@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -49,7 +50,7 @@ func main() {
 		log.Fatalf("Failed to start cmdline: %v", err)
 	}
 
-	fmt.Printf("Command line interface started on port %d\n", config.Port)
+	slog.Info(fmt.Sprintf("Command line interface started on port %d\n", config.Port))
 	fmt.Println("Connect with: telnet localhost 2324")
 
 	// 等待中断信号

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 
@@ -16,7 +17,6 @@ import (
 // TelnetServer telnet服务器
 type TelnetServer struct {
 	config      *types.Config
-	commands    map[string]types.CommandInfo
 	commandTree *commandtree.CommandTree
 	context     *mode.CommandContext
 	listener    net.Listener
@@ -24,18 +24,23 @@ type TelnetServer struct {
 	mu          sync.RWMutex
 	ctx         context.Context
 	cancel      context.CancelFunc
+	sem         chan struct{}
 }
 
 // NewTelnetServer 创建新的telnet服务器
-func NewTelnetServer(config *types.Config, commands map[string]types.CommandInfo) *TelnetServer {
+func NewTelnetServer(config *types.Config) *TelnetServer {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	maxConn := config.MaxConnections
+	if maxConn <= 0 {
+		maxConn = 100 // 默认100个连接
+	}
 	return &TelnetServer{
 		config:   config,
-		commands: commands,
 		sessions: make(map[net.Conn]*session.Session),
 		ctx:      ctx,
 		cancel:   cancel,
+		sem:      make(chan struct{}, maxConn),
 	}
 }
 
@@ -43,31 +48,35 @@ func NewTelnetServer(config *types.Config, commands map[string]types.CommandInfo
 func NewTelnetServerWithContext(config *types.Config, commandctx *mode.CommandContext) *TelnetServer {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	maxConn := config.MaxConnections
+	if maxConn <= 0 {
+		maxConn = 100 // 默认100个连接
+	}
 	return &TelnetServer{
 		config:      config,
-		commands:    commandctx.GetAvailableCommands(),
 		commandTree: commandctx.CommandTree,
 		context:     commandctx,
 		sessions:    make(map[net.Conn]*session.Session),
 		ctx:         ctx,
 		cancel:      cancel,
+		sem:         make(chan struct{}, maxConn),
 	}
 }
 
 // Start 启动telnet服务器
 func (ts *TelnetServer) Start() error {
 	var err error
-	fmt.Printf("Attempting to listen on port %d...\n", ts.config.Port)
+	slog.Info(fmt.Sprintf("Attempting to listen on port %d...\n", ts.config.Port))
 	ts.listener, err = net.Listen("tcp", fmt.Sprintf(":%d", ts.config.Port))
 	if err != nil {
-		fmt.Printf("Failed to listen on port %d: %v\n", ts.config.Port, err)
+		slog.Error(fmt.Sprintf("Failed to listen on port %d: %v\n", ts.config.Port, err))
 		return fmt.Errorf("failed to start server: %w", err)
 	}
 
-	fmt.Printf("Successfully listening on port %d, starting accept connections...\n", ts.config.Port)
+	slog.Info(fmt.Sprintf("Successfully listening on port %d, starting accept connections...\n", ts.config.Port))
 	go ts.acceptConnections()
 
-	fmt.Printf("Telnet server started on port %d\n", ts.config.Port)
+	slog.Info(fmt.Sprintf("Telnet server started on port %d\n", ts.config.Port))
 	return nil
 }
 
@@ -99,15 +108,27 @@ func (ts *TelnetServer) acceptConnections() {
 		default:
 		}
 
+		// 获取信号量，如果达到连接数上限则阻塞等待
+		select {
+		case ts.sem <- struct{}{}:
+			// 成功获取信号量
+		case <-ts.ctx.Done():
+			return
+		}
+
 		conn, err := ts.listener.Accept()
 		if err != nil {
+			<-ts.sem // 释放信号量
 			if ts.ctx.Err() != nil {
 				return
 			}
 			continue
 		}
 
-		go ts.handleConnection(conn)
+		go func() {
+			defer func() { <-ts.sem }() // 会话结束时释放信号量
+			ts.handleConnection(conn)
+		}()
 	}
 }
 
@@ -142,7 +163,7 @@ func (ts *TelnetServer) handleConnection(conn net.Conn) {
 	// 处理会话
 	err := session.Handle(ts.ctx)
 	if err != nil && err != io.EOF {
-		fmt.Printf("Session error: %v\n", err)
+		slog.Info(fmt.Sprintf("Session error: %v\n", err))
 	}
 
 	// 会话结束，清理

@@ -2,6 +2,7 @@ package cmdline
 
 import (
 	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 
@@ -23,7 +24,6 @@ type Config = types.Config
 // CmdLine 命令行接口
 type CmdLine struct {
 	config      *Config
-	commands    map[string]CommandInfo   // 向后兼容的平面命令存储
 	commandTree *commandtree.CommandTree // 新的树形命令存储
 	mu          sync.RWMutex
 	server      *server.TelnetServer
@@ -60,7 +60,6 @@ func NewCmdLine(config *Config) *CmdLine {
 
 	return &CmdLine{
 		config:      config,
-		commands:    make(map[string]CommandInfo),
 		commandTree: commandTree,
 		rootMode:    rootMode,
 		context:     context,
@@ -78,7 +77,7 @@ func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandl
 	// 新功能：添加到命令树
 	err := c.commandTree.AddCommand(name, description, handler, detailedDescription...)
 	if err != nil {
-		fmt.Printf("Warning: Failed to add command to tree: %v\n", err)
+		slog.Error(fmt.Sprintf("Warning: Failed to add command to tree: %v\n", err))
 	}
 }
 
@@ -157,36 +156,35 @@ func (c *CmdLine) Start() error {
 		c.mu.Unlock()
 		return fmt.Errorf("cmdline is already running")
 	}
-	fmt.Printf("Config: %v\n", c.config)
+	slog.Info(fmt.Sprintf("Config: %v\n", c.config))
 
 	c.isRunning = true
 	c.mu.Unlock() // 释放锁，避免死锁
 
 	// 注册内置命令（在锁外执行，避免死锁）
 	c.registerBuiltinCommands()
-	fmt.Printf("registered commands: %v\n", c.commands)
 
 	// 打印命令树结构
 	if c.commandTree != nil {
-		fmt.Printf("\n=== Command Tree Structure ===\n")
-		fmt.Printf("%s\n", c.commandTree.PrintTree())
-		fmt.Printf("=== End of Command Tree ===\n\n")
+		slog.Info(fmt.Sprintf("\n=== Command Tree Structure ===\n"))
+		slog.Info(fmt.Sprintf("%s\n", c.commandTree.PrintTree()))
+		slog.Info(fmt.Sprintf("=== End of Command Tree ===\n\n"))
 	}
 
 	// 创建telnet服务器
 	c.server = server.NewTelnetServerWithContext(c.config, c.context)
-	fmt.Printf("Telnet server created, starting...\n")
+	slog.Info(fmt.Sprintf("Telnet server created, starting...\n"))
 
 	// 启动服务器
 	err := c.server.Start()
 	if err != nil {
-		fmt.Printf("Error starting server: %v\n", err)
+		slog.Error(fmt.Sprintf("Error starting server: %v\n", err))
 		c.mu.Lock()
 		c.isRunning = false
 		c.mu.Unlock()
 		return err
 	}
-	fmt.Printf("Command line interface started on port %d\n", c.config.Port)
+	slog.Info(fmt.Sprintf("Command line interface started on port %d\n", c.config.Port))
 
 	return nil
 }
@@ -226,10 +224,10 @@ func (c *CmdLine) CreateCloseConnectionHandler() types.CommandHandler {
 
 // registerBuiltinCommands 注册内置命令
 func (c *CmdLine) registerBuiltinCommands() {
-	fmt.Printf("Starting to register builtin commands...\n")
+	slog.Info(fmt.Sprintf("Starting to register builtin commands...\n"))
 
 	// 添加退出命令
 	c.RegisterCommand("exit", "Exit and close connection", c.CreateCloseConnectionHandler())
 	c.RegisterCommand("quit", "Exit to previous mode", c.CreateCloseConnectionHandler())
-	fmt.Printf("Builtin commands registration completed\n")
+	slog.Info(fmt.Sprintf("Builtin commands registration completed\n"))
 }

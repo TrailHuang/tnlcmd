@@ -269,22 +269,6 @@ func (c *CommandCompleter) GetParameterCompletions(input string) []string {
 	return completions
 }
 
-// GetCurrentViewCommands 获取当前视图的命令列表（包括内置命令）
-func (c *CommandCompleter) GetCurrentViewCommands() []string {
-	var commands []string
-
-	// 使用当前视图的可用命令
-	if c.context != nil && c.context.CurrentMode != nil {
-		availableCommands := c.context.GetAvailableCommands()
-		for name := range availableCommands {
-			// 只显示按空格分割的第一段
-			firstPart := strings.Fields(name)[0]
-			commands = append(commands, firstPart)
-		}
-	}
-
-	return commands
-}
 
 // GetCommandTreeSuggestions 基于命令树获取当前节点的所有子节点作为建议
 func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {

@@ -26,9 +26,10 @@ const (
 
 // Config 命令行配置
 type Config struct {
-	Prompt     string
-	Port       int
-	WelcomeMsg string
-	MaxHistory int
-	RootMode   interface{} // 使用 interface{} 避免循环导入
+	Prompt         string
+	Port           int
+	WelcomeMsg     string
+	MaxHistory     int
+	MaxConnections int         // 最大并发连接数
+	RootMode       interface{} // 使用 interface{} 避免循环导入
 }

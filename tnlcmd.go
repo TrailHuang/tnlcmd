@@ -5,6 +5,7 @@ package tnlcmd
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/TrailHuang/tnlcmd/internal/cmdline"
@@ -98,7 +99,7 @@ func SimpleExample() {
 		}
 	}()
 
-	fmt.Printf("TNLCMD server started on port %d\n", config.Port)
+	slog.Info(fmt.Sprintf("TNLCMD server started on port %d\n", config.Port))
 	fmt.Println("Press Ctrl+C to stop")
 
 	// 等待中断信号
