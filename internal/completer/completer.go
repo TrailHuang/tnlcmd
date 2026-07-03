@@ -44,6 +44,17 @@ func (c *CommandCompleter) UpdateCommandTree(tree *commandtree.CommandTree) {
 	c.commandTree = tree
 }
 
+// resolveChildren 解析节点的子命令：如果是 ModeSwitch 节点，返回目标模式的命令树子节点
+func (c *CommandCompleter) resolveChildren(node *commandtree.CommandNode) map[string]*commandtree.CommandNode {
+	if node.Type == types.NodeTypeModeSwitch && node.ModeName != "" && c.context != nil {
+		rootMode := c.context.GetRootMode()
+		if targetMode, exists := rootMode.Children[node.ModeName]; exists && targetMode.CommandTree != nil {
+			return targetMode.CommandTree.Root.Children
+		}
+	}
+	return node.Children
+}
+
 // Complete 命令补全
 func (c *CommandCompleter) Complete(input string) []string {
 	var completions []string
@@ -149,14 +160,22 @@ func (c *CommandCompleter) GetNextLevelCompletions(input string) []string {
 	}
 
 	if len(matchingChildren) == 1 {
-		baseParts := inputParts[:len(inputParts)-1]
-		var fullCommand string
-		if len(baseParts) > 0 {
-			fullCommand = strings.Join(baseParts, " ") + " " + matchingChildren[0]
+		// 如果唯一匹配是 ModeSwitch 节点，展示目标模式的子命令
+		if matchedNode, exists := node.Children[matchingChildren[0]]; exists && matchedNode.Type == types.NodeTypeModeSwitch {
+			targetChildren := c.resolveChildren(matchedNode)
+			for name := range targetChildren {
+				nextLevel = append(nextLevel, name)
+			}
 		} else {
-			fullCommand = matchingChildren[0]
+			baseParts := inputParts[:len(inputParts)-1]
+			var fullCommand string
+			if len(baseParts) > 0 {
+				fullCommand = strings.Join(baseParts, " ") + " " + matchingChildren[0]
+			} else {
+				fullCommand = matchingChildren[0]
+			}
+			nextLevel = []string{fullCommand}
 		}
-		nextLevel = []string{fullCommand}
 	} else if len(matchingChildren) > 1 {
 		nextLevel = matchingChildren
 	}
@@ -302,16 +321,21 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 	}
 
 	// 显示当前节点的所有子节点（包括参数节点），返回命令和描述的组合
-	for name, child := range node.Children {
+	// 如果是 ModeSwitch 节点，解析目标模式的命令
+	children := c.resolveChildren(node)
+	for name, child := range children {
 		// 格式："命令名称（固定32宽度左对齐） - 描述"
 		suggestion := fmt.Sprintf("%-32s %s", name, child.Description)
 		suggestions = append(suggestions, suggestion)
 	}
-	//将视图切换命令也添加到建议中
-	if len(inputParts) <= 1 {
+	//将视图切换命令也添加到建议中（仅在根层级且未作为子节点展示时）
+	if len(inputParts) <= 1 && node.Type != types.NodeTypeModeSwitch {
 		for _, key := range c.context.CurrentMode.CommandTree.GetModeCommandKeys() {
+			// 跳过已作为子节点展示的视图切换命令（避免重复）
+			if _, exists := children[key]; exists {
+				continue
+			}
 			if strings.HasPrefix(key, input) {
-				// 对于视图切换命令，使用默认描述
 				suggestion := fmt.Sprintf("%-32s Switch to %s mode", key, key)
 				suggestions = append(suggestions, suggestion)
 			}

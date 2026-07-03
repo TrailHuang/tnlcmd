@@ -100,8 +100,9 @@ func (c *CmdLine) findOrCreateMode(modePath string, description string) *mode.Co
 	subMode := mode.NewCommandMode(modeName, prompt, description)
 	currentMode.AddSubMode(subMode)
 
-	// 同时添加到命令树，使用专门的视图切换命令方法
-	_ = c.commandTree.AddModeCommand(modeName, fmt.Sprintf("Enter %s configuration mode B", description))
+	// 同时添加到全局命令树和根模式命令树（用于视图切换查找）
+	_ = c.commandTree.AddModeCommand(modeName, fmt.Sprintf("Enter %s configuration mode", modeName))
+	_ = c.rootMode.CommandTree.AddModeCommand(modeName, fmt.Sprintf("Enter %s configuration mode", modeName))
 
 	// 添加退出命令
 	subMode.AddCommand("exit", "Exit and close connection", c.CreateCloseConnectionHandler())

@@ -235,3 +235,109 @@ func TestNilContext(t *testing.T) {
 		t.Errorf("GetCommandTreeSuggestions with nil context should return empty, got %v", suggestions)
 	}
 }
+
+// setupCompleterWithModes 创建带有子模式的补全器
+func setupCompleterWithModes() *CommandCompleter {
+	rootMode := mode.NewCommandMode("root", "test>", "test mode")
+	handler := func(args []string) string { return "" }
+
+	rootMode.AddCommand("show", "Show information", handler)
+	rootMode.AddCommand("exit", "Exit", handler)
+
+	// Create configure sub-mode
+	configMode := mode.NewCommandMode("configure", "config#", "configure mode")
+	configMode.AddCommand("hostname HOSTNAME", "Set hostname", handler)
+	configMode.AddCommand("router PROTOCOL", "Enable routing", handler)
+	configMode.AddCommand("exit", "Exit to root", handler)
+	rootMode.AddSubMode(configMode)
+
+	// Create interface sub-mode
+	ifaceMode := mode.NewCommandMode("interface", "iface#", "interface mode")
+	ifaceMode.AddCommand("ip IPADDR MASK", "Set IP address", handler)
+	ifaceMode.AddCommand("shutdown", "Shutdown interface", handler)
+	ifaceMode.AddCommand("description TEXT", "Set description", handler)
+	ifaceMode.AddCommand("exit", "Exit to root", handler)
+	rootMode.AddSubMode(ifaceMode)
+
+	// Register mode switch commands in root's command tree
+	rootMode.CommandTree.AddModeCommand("configure", "Enter configure mode")
+	rootMode.CommandTree.AddModeCommand("interface", "Enter interface mode")
+
+	ctx := &mode.CommandContext{
+		CurrentMode: rootMode,
+		Path:        []string{},
+	}
+	return NewCommandCompleterWithContext(ctx)
+}
+
+func TestGetCommandTreeSuggestions_ModeSwitch(t *testing.T) {
+	c := setupCompleterWithModes()
+
+	// When typing "interface" and pressing ?, should show interface sub-commands
+	suggestions := c.GetCommandTreeSuggestions("interface")
+	if len(suggestions) < 2 {
+		t.Errorf("GetCommandTreeSuggestions('interface') should show sub-commands, got %d: %v", len(suggestions), suggestions)
+	}
+
+	// Should contain interface-specific commands
+	hasIP := false
+	hasShutdown := false
+	for _, s := range suggestions {
+		if strings.Contains(s, "ip") || strings.Contains(s, "IPADDR") {
+			hasIP = true
+		}
+		if strings.Contains(s, "shutdown") {
+			hasShutdown = true
+		}
+	}
+	if !hasIP {
+		t.Error("suggestions for 'interface' should include ip command")
+	}
+	if !hasShutdown {
+		t.Error("suggestions for 'interface' should include shutdown command")
+	}
+
+	// Similarly for configure mode
+	suggestions = c.GetCommandTreeSuggestions("configure")
+	if len(suggestions) < 2 {
+		t.Errorf("GetCommandTreeSuggestions('configure') should show sub-commands, got %d: %v", len(suggestions), suggestions)
+	}
+}
+
+func TestGetNextLevelCompletions_ModeSwitch(t *testing.T) {
+	c := setupCompleterWithModes()
+
+	// Tab after typing full mode name should show sub-commands
+	completions := c.GetNextLevelCompletions("interface")
+	if len(completions) < 2 {
+		t.Errorf("GetNextLevelCompletions('interface') should show sub-commands, got %d: %v", len(completions), completions)
+	}
+
+	completions = c.GetNextLevelCompletions("configure")
+	if len(completions) < 2 {
+		t.Errorf("GetNextLevelCompletions('configure') should show sub-commands, got %d: %v", len(completions), completions)
+	}
+}
+
+func TestComplete_ModeSwitchAtRoot(t *testing.T) {
+	c := setupCompleterWithModes()
+
+	// Tab completion at root level should include mode switch commands
+	completions := c.Complete("")
+	hasInterface := false
+	hasConfigure := false
+	for _, comp := range completions {
+		if comp == "interface" {
+			hasInterface = true
+		}
+		if comp == "configure" {
+			hasConfigure = true
+		}
+	}
+	if !hasInterface {
+		t.Error("root completions should include 'interface' mode switch")
+	}
+	if !hasConfigure {
+		t.Error("root completions should include 'configure' mode switch")
+	}
+}

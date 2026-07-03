@@ -259,6 +259,20 @@ func (s *Session) processCommand(cmd string) error {
 	// 首先检查当前视图的命令树
 	if s.context != nil && s.context.CurrentMode != nil && s.context.CurrentMode.CommandTree != nil {
 		node, matchedPath, args, err := s.context.CurrentMode.CommandTree.FindCommand(parts)
+
+		// 回退：如果当前模式树找不到，尝试根模式树（用于跨模式切换）
+		if err != nil && len(parts) == 1 {
+			rootMode := s.context.GetRootMode()
+			if rootMode != nil && rootMode.CommandTree != nil {
+				if fallbackNode, fbPath, fbArgs, fbErr := rootMode.CommandTree.FindCommand(parts); fbErr == nil && fallbackNode != nil && fallbackNode.Type == types.NodeTypeModeSwitch {
+					node = fallbackNode
+					matchedPath = fbPath
+					args = fbArgs
+					err = nil
+				}
+			}
+		}
+
 		if err == nil && node != nil {
 			// 处理视图切换命令
 			if node.Type == types.NodeTypeModeSwitch {
@@ -410,9 +424,10 @@ func (s *Session) showCompletions(completions []string) {
 	s.flushWriter()
 }
 
-// writerWrite 写入数据
+// writerWrite 写入数据（自动 flush 以确保即时发送，匹配旧版直接 conn.Write 的行为）
 func (s *Session) writerWrite(data string) {
 	s.writer.WriteString(data)
+	s.writer.Flush()
 }
 
 // flushWriter 刷新写入缓冲区
