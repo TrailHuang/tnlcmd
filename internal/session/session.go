@@ -453,14 +453,14 @@ func (s *Session) UpdatePrompt(prompt string) {
 
 // normalizeLineEndings 规范化换行符，确保使用 \r\n
 func normalizeLineEndings(text string) string {
-	// 如果已经是 \r\n，直接返回
-	if strings.Contains(text, "\r\n") && !strings.Contains(text, "\n") {
+	// 如果不含 \n，无需处理
+	if !strings.Contains(text, "\n") {
 		return text
 	}
 
-	// 替换 \n 为 \r\n，但避免重复替换 \r\n
-	result := strings.ReplaceAll(text, "\r\n", "\n")  // 先统一为 \n
-	result = strings.ReplaceAll(result, "\n", "\r\n") // 再替换为 \r\n
+	// 先统一为 \n，再替换为 \r\n，避免重复替换
+	result := strings.ReplaceAll(text, "\r\n", "\n")
+	result = strings.ReplaceAll(result, "\n", "\r\n")
 
 	return result
 }

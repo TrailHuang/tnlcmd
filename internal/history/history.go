@@ -27,6 +27,12 @@ func (h *CommandHistory) Add(cmd string) {
 		return
 	}
 
+	if h.maxSize <= 0 {
+		h.history = h.history[:0]
+		h.position = -1
+		return
+	}
+
 	if len(h.history) >= h.maxSize {
 		h.history = h.history[1:]
 	}

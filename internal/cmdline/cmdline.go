@@ -140,10 +140,17 @@ func (c *CmdLine) SetConfig(key, value string) error {
 	case "welcome":
 		c.config.WelcomeMsg = value
 	case "maxhistory":
-		// 这里可以添加类型转换逻辑
-		c.config.MaxHistory, _ = strconv.Atoi(value)
+		v, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid maxhistory value %q: %w", value, err)
+		}
+		c.config.MaxHistory = v
 	case "port":
-		c.config.Port, _ = strconv.Atoi(value)
+		v, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid port value %q: %w", value, err)
+		}
+		c.config.Port = v
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}
@@ -224,5 +231,5 @@ func (c *CmdLine) CreateCloseConnectionHandler() types.CommandHandler {
 func (c *CmdLine) registerBuiltinCommands() {
 	// 添加退出命令
 	c.RegisterCommand("exit", "Exit and close connection", c.CreateCloseConnectionHandler())
-	c.RegisterCommand("quit", "Exit to previous mode", c.CreateCloseConnectionHandler())
+	c.RegisterCommand("quit", "Exit and close connection", c.CreateCloseConnectionHandler())
 }

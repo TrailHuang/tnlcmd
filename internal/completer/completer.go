@@ -141,10 +141,15 @@ func (c *CommandCompleter) GetNextLevelCompletions(input string) []string {
 		lastPart = inputParts[len(inputParts)-1]
 	}
 
+	// seen 用于去重：视图切换命令同时存在于命令树 Root.Children
+	// 和 rootMode.Children 中，避免重复添加
+	seen := make(map[string]bool)
+
 	// 补全当前视图命令树中的命令
 	for name := range node.Children {
 		if strings.HasPrefix(name, lastPart) {
 			matchingChildren = append(matchingChildren, name)
+			seen[name] = true
 		}
 	}
 
@@ -153,18 +158,33 @@ func (c *CommandCompleter) GetNextLevelCompletions(input string) []string {
 		rootMode := c.context.GetRootMode()
 		for name, subMode := range rootMode.Children {
 			// 如果当前不是该子模式，则添加切换命令
-			if c.context.CurrentMode != subMode && strings.HasPrefix(name, lastPart) {
+			// 跳过已通过命令树添加过的命令（避免重复）
+			if c.context.CurrentMode != subMode && strings.HasPrefix(name, lastPart) && !seen[name] {
 				matchingChildren = append(matchingChildren, name)
+				seen[name] = true
 			}
 		}
 	}
 
 	if len(matchingChildren) == 1 {
-		// 如果唯一匹配是 ModeSwitch 节点，展示目标模式的子命令
+		// 如果唯一匹配是 ModeSwitch 节点
 		if matchedNode, exists := node.Children[matchingChildren[0]]; exists && matchedNode.Type == types.NodeTypeModeSwitch {
-			targetChildren := c.resolveChildren(matchedNode)
-			for name := range targetChildren {
-				nextLevel = append(nextLevel, name)
+			// 输入已是完整命令名时，展示目标模式的子命令；
+			// 否则（部分前缀如 "con"）只补全为完整命令名
+			if lastPart == matchingChildren[0] {
+				targetChildren := c.resolveChildren(matchedNode)
+				for name := range targetChildren {
+					nextLevel = append(nextLevel, name)
+				}
+			} else {
+				baseParts := inputParts[:len(inputParts)-1]
+				var fullCommand string
+				if len(baseParts) > 0 {
+					fullCommand = strings.Join(baseParts, " ") + " " + matchingChildren[0]
+				} else {
+					fullCommand = matchingChildren[0]
+				}
+				nextLevel = []string{fullCommand}
 			}
 		} else {
 			baseParts := inputParts[:len(inputParts)-1]
@@ -276,11 +296,14 @@ func (c *CommandCompleter) GetCurrentViewCommands() []string {
 	// 使用当前视图的可用命令
 	if c.context != nil && c.context.CurrentMode != nil {
 		availableCommands := c.context.GetAvailableCommands()
-		for name := range availableCommands {
-			// 只显示按空格分割的第一段
-			firstPart := strings.Fields(name)[0]
-			commands = append(commands, firstPart)
+	for name := range availableCommands {
+		// 只显示按空格分割的第一段
+		parts := strings.Fields(name)
+		if len(parts) == 0 {
+			continue
 		}
+		commands = append(commands, parts[0])
+	}
 	}
 
 	return commands

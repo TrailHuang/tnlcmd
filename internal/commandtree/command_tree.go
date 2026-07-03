@@ -12,6 +12,12 @@ import (
 	"github.com/TrailHuang/tnlcmd/pkg/types"
 )
 
+// 预编译正则表达式，避免每次调用重新编译
+var (
+	numberRangeRegexp = regexp.MustCompile(`[<\[](\d+)-(\d+)[>\]]`)
+	enumValuesRegexp  = regexp.MustCompile(`[\(\[](.*?)[\)\]]`)
+)
+
 // CommandNodeType 命令节点类型
 type CommandNodeType = types.CommandNodeType
 
@@ -316,7 +322,10 @@ func (n *CommandNode) findCommand(args []string, path []string, matchArgs []stri
 	// 首先尝试精确匹配命令节点
 	for _, child := range n.Children {
 		if (child.Type == NodeTypeCommand || child.Type == NodeTypeModeSwitch) && child.Name == currentArg {
-			return child.findCommand(remainingArgs, append(path, currentArg), matchArgs)
+			newPath := make([]string, len(path)+1)
+			copy(newPath, path)
+			newPath[len(path)] = currentArg
+			return child.findCommand(remainingArgs, newPath, matchArgs)
 		}
 	}
 
@@ -332,7 +341,13 @@ func (n *CommandNode) findCommand(args []string, path []string, matchArgs []stri
 				}
 			} else if IsParameterMatch(child, currentArg) {
 				// 参数节点匹配成功，返回当前节点，剩余参数作为处理函数的参数
-				return child.findCommand(remainingArgs, append(path, currentArg), append(matchArgs, currentArg))
+				newPath := make([]string, len(path)+1)
+				copy(newPath, path)
+				newPath[len(path)] = currentArg
+				newMatchArgs := make([]string, len(matchArgs)+1)
+				copy(newMatchArgs, matchArgs)
+				newMatchArgs[len(matchArgs)] = currentArg
+				return child.findCommand(remainingArgs, newPath, newMatchArgs)
 			}
 		}
 	}
@@ -613,9 +628,12 @@ func isValidNumberInRange(node *CommandNode, input string) bool {
 		return false
 	}
 
-	// 从节点描述中提取范围信息
-	// 范围参数格式如: <1-10> 或 [1-100]
-	min, max := extractNumberRange(node.Name)
+	// 优先使用节点结构体中的范围字段
+	min, max := node.RangeMin, node.RangeMax
+	if min == 0 && max == 0 {
+		// 回退：从 Name 字符串解析（兼容直接构造的节点）
+		min, max = extractNumberRange(node.Name)
+	}
 
 	// 如果没有指定范围，接受任何有效数字
 	if min == 0 && max == 0 {
@@ -629,8 +647,7 @@ func isValidNumberInRange(node *CommandNode, input string) bool {
 // extractNumberRange 从描述中提取数字范围
 func extractNumberRange(Name string) (int, int) {
 	// 范围通常用尖括号或方括号括起来，如 <1-10> 或 [1-100]
-	re := regexp.MustCompile(`[<\[](\d+)-(\d+)[>\]]`)
-	matches := re.FindStringSubmatch(Name)
+	matches := numberRangeRegexp.FindStringSubmatch(Name)
 	if len(matches) == 3 {
 		min, err1 := strconv.Atoi(matches[1])
 		max, err2 := strconv.Atoi(matches[2])
@@ -678,7 +695,11 @@ func GetNumberValidationError(node *CommandNode, input string) string {
 // GetNumberCompletions 获取数字参数的补全选项
 func GetNumberCompletions(node *CommandNode, input string) []string {
 	// 数字参数通常不需要补全，但可以显示范围提示
-	min, max := extractNumberRange(node.Description)
+	// 优先使用节点结构体中的范围字段，回退到从 Name 解析
+	min, max := node.RangeMin, node.RangeMax
+	if min == 0 && max == 0 {
+		min, max = extractNumberRange(node.Name)
+	}
 	if min == 0 && max == 0 {
 		return nil
 	}
@@ -727,8 +748,7 @@ func extractEnumValues(description string) []string {
 	var enumValues []string
 
 	// 匹配括号内的枚举值
-	re := regexp.MustCompile(`[\(\[](.*?)[\)\]]`)
-	matches := re.FindStringSubmatch(description)
+	matches := enumValuesRegexp.FindStringSubmatch(description)
 	if len(matches) > 1 {
 		// 分割枚举值
 		values := strings.Split(matches[1], "|")

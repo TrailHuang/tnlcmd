@@ -44,8 +44,12 @@ func NewCommandMode(name, prompt, description string) *CommandMode {
 }
 
 func (m *CommandMode) SetPrompt(prompt string) {
-	if !strings.HasSuffix(prompt, ">") {
-		prompt = prompt + "> "
+	if !strings.HasSuffix(prompt, ">") && !strings.HasSuffix(prompt, "#") {
+		if m.Name == "root" {
+			prompt = prompt + "> "
+		} else {
+			prompt = strings.TrimSpace(prompt) + "# "
+		}
 	}
 	m.Prompt = prompt
 }
