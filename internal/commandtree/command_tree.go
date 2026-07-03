@@ -51,10 +51,9 @@ type PathNode struct {
 
 // CommandTree 命令树
 type CommandTree struct {
-	Root *CommandNode
+	Root         *CommandNode
+	ModeCommands map[string]*CommandNode // 视图切换命令存储（实例级别）
 }
-
-var ModeCommands = make(map[string]*CommandNode) // 全局视图切换命令存储
 
 // NewCommandTree 创建新的命令树
 func NewCommandTree() *CommandTree {
@@ -64,6 +63,7 @@ func NewCommandTree() *CommandTree {
 			Type:     NodeTypeCommand,
 			Children: make(map[string]*CommandNode),
 		},
+		ModeCommands: make(map[string]*CommandNode),
 	}
 }
 
@@ -79,8 +79,8 @@ func NewCommandNode(name string, nodeType CommandNodeType, description string) *
 
 // GetModeCommandKeys 获取ModeCommands中的所有key，按数组返回
 func (t *CommandTree) GetModeCommandKeys() []string {
-	keys := make([]string, 0, len(ModeCommands))
-	for key := range ModeCommands {
+	keys := make([]string, 0, len(t.ModeCommands))
+	for key := range t.ModeCommands {
 		keys = append(keys, key)
 	}
 	return keys
@@ -165,8 +165,8 @@ func (t *CommandTree) AddModeCommand(modeName string, description string) error 
 	t.Root.Children[modeName] = node
 	node.Parent = t.Root
 
-	// 同时添加到全局视图切换命令存储
-	ModeCommands[modeName] = node
+	// 添加到实例级别的视图切换命令存储
+	t.ModeCommands[modeName] = node
 
 	return nil
 }
@@ -281,10 +281,10 @@ func isAllUppercase(s string) bool {
 
 // FindCommand 查找匹配的命令
 func (t *CommandTree) FindCommand(args []string) (*CommandNode, []string, []string, error) {
-	// 如果只有一个参数，优先在全局视图切换命令中查找
+	// 如果只有一个参数，优先在视图切换命令中查找
 	if len(args) == 1 {
 		modeName := args[0]
-		if modeNode, exists := ModeCommands[modeName]; exists {
+		if modeNode, exists := t.ModeCommands[modeName]; exists {
 			// 找到匹配的视图切换命令
 			return modeNode, []string{modeName}, []string{}, nil
 		}

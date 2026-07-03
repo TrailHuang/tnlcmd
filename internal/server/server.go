@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 
@@ -57,17 +58,15 @@ func NewTelnetServerWithContext(config *types.Config, commandctx *mode.CommandCo
 // Start 启动telnet服务器
 func (ts *TelnetServer) Start() error {
 	var err error
-	fmt.Printf("Attempting to listen on port %d...\n", ts.config.Port)
+	slog.Debug("attempting to listen", "port", ts.config.Port)
 	ts.listener, err = net.Listen("tcp", fmt.Sprintf(":%d", ts.config.Port))
 	if err != nil {
-		fmt.Printf("Failed to listen on port %d: %v\n", ts.config.Port, err)
 		return fmt.Errorf("failed to start server: %w", err)
 	}
 
-	fmt.Printf("Successfully listening on port %d, starting accept connections...\n", ts.config.Port)
+	slog.Debug("listener established, accepting connections", "port", ts.config.Port)
 	go ts.acceptConnections()
 
-	fmt.Printf("Telnet server started on port %d\n", ts.config.Port)
 	return nil
 }
 
@@ -142,7 +141,7 @@ func (ts *TelnetServer) handleConnection(conn net.Conn) {
 	// 处理会话
 	err := session.Handle(ts.ctx)
 	if err != nil && err != io.EOF {
-		fmt.Printf("Session error: %v\n", err)
+		slog.Warn("session error", "error", err)
 	}
 
 	// 会话结束，清理

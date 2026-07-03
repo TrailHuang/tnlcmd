@@ -2,6 +2,7 @@ package cmdline
 
 import (
 	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 
@@ -78,7 +79,7 @@ func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandl
 	// 新功能：添加到命令树
 	err := c.commandTree.AddCommand(name, description, handler, detailedDescription...)
 	if err != nil {
-		fmt.Printf("Warning: Failed to add command to tree: %v\n", err)
+		slog.Warn("failed to add command to tree", "error", err)
 	}
 }
 
@@ -157,36 +158,30 @@ func (c *CmdLine) Start() error {
 		c.mu.Unlock()
 		return fmt.Errorf("cmdline is already running")
 	}
-	fmt.Printf("Config: %v\n", c.config)
 
 	c.isRunning = true
 	c.mu.Unlock() // 释放锁，避免死锁
 
 	// 注册内置命令（在锁外执行，避免死锁）
 	c.registerBuiltinCommands()
-	fmt.Printf("registered commands: %v\n", c.commands)
 
-	// 打印命令树结构
+	// 打印命令树结构（debug级别）
 	if c.commandTree != nil {
-		fmt.Printf("\n=== Command Tree Structure ===\n")
-		fmt.Printf("%s\n", c.commandTree.PrintTree())
-		fmt.Printf("=== End of Command Tree ===\n\n")
+		slog.Debug("command tree", "structure", "\n"+c.commandTree.PrintTree())
 	}
 
 	// 创建telnet服务器
 	c.server = server.NewTelnetServerWithContext(c.config, c.context)
-	fmt.Printf("Telnet server created, starting...\n")
 
 	// 启动服务器
 	err := c.server.Start()
 	if err != nil {
-		fmt.Printf("Error starting server: %v\n", err)
 		c.mu.Lock()
 		c.isRunning = false
 		c.mu.Unlock()
 		return err
 	}
-	fmt.Printf("Command line interface started on port %d\n", c.config.Port)
+	slog.Info("command line interface started", "port", c.config.Port)
 
 	return nil
 }
@@ -212,7 +207,7 @@ func (c *CmdLine) Stop() error {
 func (c *CmdLine) CreateExitToRootHandler() types.CommandHandler {
 	return func(args []string) string {
 		// 返回特殊标记，让会话层知道需要更新模式状态
-		return "__EXIT_TO_ROOT__"
+		return types.SentinelExitToRoot
 	}
 }
 
@@ -220,16 +215,13 @@ func (c *CmdLine) CreateExitToRootHandler() types.CommandHandler {
 func (c *CmdLine) CreateCloseConnectionHandler() types.CommandHandler {
 	return func(args []string) string {
 		// 返回特殊标记，让会话层处理退出逻辑
-		return "__EXIT__"
+		return types.SentinelExit
 	}
 }
 
 // registerBuiltinCommands 注册内置命令
 func (c *CmdLine) registerBuiltinCommands() {
-	fmt.Printf("Starting to register builtin commands...\n")
-
 	// 添加退出命令
 	c.RegisterCommand("exit", "Exit and close connection", c.CreateCloseConnectionHandler())
 	c.RegisterCommand("quit", "Exit to previous mode", c.CreateCloseConnectionHandler())
-	fmt.Printf("Builtin commands registration completed\n")
 }

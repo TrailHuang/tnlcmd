@@ -60,7 +60,7 @@ func main() {
 	fmt.Println("\nShutting down...")
 
 	// 停止命令行服务
-	cmdline.Stop()
+	_ = cmdline.Stop()
 
 	fmt.Println("Command line interface stopped")
 }

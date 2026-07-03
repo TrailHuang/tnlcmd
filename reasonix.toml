@@ -1,0 +1,2 @@
+[permissions]
+allow = ["explore", "Edit", "Bash(cd /mnt/d/BaiduSyncdisk/my_code/git/tnlcmd && go build ./... 2>&1)", "Bash(cd /mnt/d/BaiduSyncdisk/my_code/git/tnlcmd && go vet ./... 2>&1)", "Bash(cd /mnt/d/BaiduSyncdisk/my_code/git/tnlcmd && go test ./internal/... -v -count=1 2>&1)", "Bash(cd /mnt/d/BaiduSyncdisk/my_code/git/tnlcmd && go build ./... 2>&1 && go vet ./... 2>&1 && echo \"=== ALL CHECKS PASSED ===\")", "Bash(cd /mnt/d/BaiduSyncdisk/my_code/git/tnlcmd && go test -race ./internal/... -count=1 2>&1)"]

@@ -76,23 +76,13 @@ func (c *CommandCompleter) Complete(input string) []string {
 				}
 			}
 
-			// 智能补全逻辑
+			// 智能补全：找到最长公共前缀
 			if len(matchingChildren) == 1 {
 				completions = matchingChildren
 			} else if len(matchingChildren) > 1 {
-				// 检查是否存在多个不同的前缀模式
-				allSamePrefix := true
-				firstChild := matchingChildren[0]
-
-				for i := 1; i < len(matchingChildren); i++ {
-					if !strings.HasPrefix(matchingChildren[i], firstChild) {
-						allSamePrefix = false
-						break
-					}
-				}
-
-				if allSamePrefix {
-					completions = []string{firstChild}
+				lcp := findLongestCommonPrefix(matchingChildren)
+				if lcp != "" && lcp != currentInput {
+					completions = []string{lcp}
 				} else {
 					completions = matchingChildren
 				}
@@ -215,18 +205,9 @@ func (c *CommandCompleter) GetCompletions(input string) []string {
 	if len(matchingChildren) == 1 {
 		completions = matchingChildren
 	} else if len(matchingChildren) > 1 {
-		allSamePrefix := true
-		firstChild := matchingChildren[0]
-
-		for i := 1; i < len(matchingChildren); i++ {
-			if !strings.HasPrefix(matchingChildren[i], firstChild) {
-				allSamePrefix = false
-				break
-			}
-		}
-
-		if allSamePrefix {
-			completions = []string{firstChild}
+		lcp := findLongestCommonPrefix(matchingChildren)
+		if lcp != "" && lcp != currentInput {
+			completions = []string{lcp}
 		} else {
 			completions = matchingChildren
 		}
@@ -337,4 +318,21 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 		}
 	}
 	return suggestions
+}
+
+// findLongestCommonPrefix 找到字符串切片中最长的公共前缀
+func findLongestCommonPrefix(strs []string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	lcp := strs[0]
+	for _, s := range strs[1:] {
+		for !strings.HasPrefix(s, lcp) {
+			lcp = lcp[:len(lcp)-1]
+			if lcp == "" {
+				return ""
+			}
+		}
+	}
+	return lcp
 }

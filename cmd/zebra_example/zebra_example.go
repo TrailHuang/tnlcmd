@@ -18,9 +18,9 @@ func main() {
 
 	// 创建命令行接口
 	cmdline := tnlcmd.NewCmdLine(config)
-	cmdline.SetConfig("prompt", "test")
-	cmdline.SetConfig("welcome", "Welcome to  CLI!\r\nType '?' for available commands.\r\n")
-	cmdline.SetConfig("maxhistory", "50")
+	_ = cmdline.SetConfig("prompt", "test")
+	_ = cmdline.SetConfig("welcome", "Welcome to  CLI!\r\nType '?' for available commands.\r\n")
+	_ = cmdline.SetConfig("maxhistory", "50")
 
 	// 注册根模式命令（特权EXEC模式）
 	rootCommands := []struct {
@@ -116,7 +116,7 @@ func main() {
 	fmt.Println("\nShutting down...")
 
 	// 停止命令行服务
-	cmdline.Stop()
+	_ = cmdline.Stop()
 
 	fmt.Println("Zebra-style CLI stopped")
 }

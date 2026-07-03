@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -21,6 +21,8 @@ import (
 // Session 会话结构
 type Session struct {
 	conn       net.Conn
+	reader     *bufio.Reader
+	writer     *bufio.Writer
 	config     *types.Config
 	commands   map[string]types.CommandInfo
 	mu         sync.RWMutex
@@ -41,6 +43,8 @@ func NewSession(conn net.Conn, config *types.Config, commands map[string]types.C
 
 	s := &Session{
 		conn:     conn,
+		reader:   bufio.NewReader(conn),
+		writer:   bufio.NewWriter(conn),
 		config:   config,
 		commands: commands,
 		context:  context,
@@ -60,6 +64,8 @@ func NewSession(conn net.Conn, config *types.Config, commands map[string]types.C
 func NewSessionWithContext(conn net.Conn, config *types.Config, context *mode.CommandContext) *Session {
 	s := &Session{
 		conn:       conn,
+		reader:     bufio.NewReader(conn),
+		writer:     bufio.NewWriter(conn),
 		config:     config,
 		context:    context,
 		lastActive: time.Now(),
@@ -125,15 +131,13 @@ func (s *Session) Handle(ctx context.Context) error {
 		}
 		if err != nil {
 			// 参数验证错误等非致命错误，只记录日志，不关闭连接
-			log.Printf("Command execution error: %v", err)
+			slog.Error("command execution error", "error", err)
 		}
 	}
 }
 
 // readLine 读取一行输入
 func (s *Session) readLine() (string, error) {
-	reader := bufio.NewReader(s.conn)
-
 	var buffer strings.Builder
 	var historyIndex int = -1
 
@@ -144,7 +148,7 @@ func (s *Session) readLine() (string, error) {
 	for {
 		// 使用缓冲区读取，更好地处理telnet协议
 		data := make([]byte, 1024)
-		n, err := reader.Read(data)
+		n, err := s.reader.Read(data)
 		if err != nil {
 			return "", err
 		}
@@ -280,14 +284,14 @@ func (s *Session) processCommand(cmd string) error {
 				result := node.Handler(args)
 				if result != "" {
 					// 检查是否为退出命令的特殊标记
-					if result == "__EXIT__" {
+					if result == types.SentinelExit {
 						s.writerWrite("Goodbye!\r\n")
 						s.flushWriter()
 						return io.EOF
 					}
 
 					// 检查是否为退出到根模式的特殊标记
-					if result == "__EXIT_TO_ROOT__" {
+					if result == types.SentinelExitToRoot {
 						s.writerWrite("Exiting to privileged EXEC mode\r\n")
 						rootMode := s.context.GetRootMode()
 						s.context.ChangeMode(rootMode)
@@ -408,14 +412,12 @@ func (s *Session) showCompletions(completions []string) {
 
 // writerWrite 写入数据
 func (s *Session) writerWrite(data string) {
-	s.conn.Write([]byte(data))
+	s.writer.WriteString(data)
 }
 
-// flushWriter 刷新写入器
+// flushWriter 刷新写入缓冲区
 func (s *Session) flushWriter() {
-	// 创建临时的writer来刷新缓冲区
-	writer := bufio.NewWriter(s.conn)
-	writer.Flush()
+	s.writer.Flush()
 }
 
 // UpdatePrompt 更新会话的提示符
@@ -466,7 +468,8 @@ func (s *Session) enableTelnetCharacterMode() {
 		0xFF, 0xFB, 0x03, // IAC WILL SUPPRESS_GO_AHEAD
 	}
 
-	s.conn.Write(telnetCommands)
+	s.writer.Write(telnetCommands)
+	s.writer.Flush()
 }
 
 // IsStale 检查会话是否过期
