@@ -579,6 +579,7 @@ func main() {
 | **P0** | `Config.RootMode` 为 `interface{}` 且在多处类型断言无保护 | 可能 panic | ✅ 已修复 | `server.go` / `session.go` 中的类型断言改为 comma-ok 模式，类型不匹配时记录日志并安全降级（关闭连接或回退到空根模式）而非 panic |
 | **P1** | `__EXIT__` / `__EXIT_TO_ROOT__` 魔术字符串 | 应改为 Sentinel Error | ✅ 已解决 | 字符串已集中为 `types.SentinelExit` / `types.SentinelExitToRoot` 常量，全代码库无裸字面量；因 `CommandHandler` 返回 `string`（CLI 输出契约），保留字符串常量方案，不引入破坏性 API 变更 |
 | **P1** | Completer 存在三套相似遍历逻辑 | 可维护性差 | ✅ 已修复 | 抽取共享辅助函数 `resolveNodeForInput` / `collectCommandCompletions` / `applyCommonPrefix` / `buildFullCommand`，`Complete`、`GetCompletions`、`GetNextLevelCompletions` 复用同一遍历逻辑；同时修复了空输入下 `buildFullCommand` 的潜在越界 |
+| **P1** | `readLine` 假设 IAC 恒为 3 字节，2 字节 IAC 命令（NOP/GA/AYT/EC/IAC-IAC）后的用户字节被吞掉 | `?` 间歇性失效，多输几次又恢复 | ✅ 已修复 | 用状态机（`inputState`：stNormal/stIAC/stIACOpt/stSB/stSBIAC/stESC/stESCBracket）替换 pending 缓冲，根据 IAC 命令字节区分 2/3 字节序列；状态跨 read 批次保持，正确处理变长 IAC 与 ESC 方向键序列 |
 | **P2** | 无连接数限制 / 无认证 / 无 TLS | 安全性不足 | ⏳ 未处理 | — |
 | **P2** | README 声称的左右箭头光标移动未实现 | 功能缺失 | ⏳ 未处理 | — |
 

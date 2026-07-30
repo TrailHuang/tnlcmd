@@ -370,3 +370,100 @@ func TestSession_QuestionMarkAfterIAC(t *testing.T) {
 		t.Fatalf("? did not trigger help after IAC sequences (regression): %v (buf=%q)", err, got)
 	}
 }
+
+// TestSession_TwoByteIAC_DoesNotSwallowQuestionMark 验证 2 字节 IAC 命令
+// （如 IAC NOP = FF F1）不会吞掉紧随其后的 ? 字符。
+//
+// 这是用户报告的精确场景：? 间歇性失效，其他字符正常，多输几次又恢复。
+// 根因：旧代码假设 IAC 恒为 3 字节，2 字节命令后第一个用户字节被误当作
+// IAC 第三字节吞掉。若该字节恰好是 ?，帮助就不触发。
+func TestSession_TwoByteIAC_DoesNotSwallowQuestionMark(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	rootMode.AddCommand("echo", "Echo arguments", func(args []string) string { return "" })
+
+	pt := newPipeTest(t, 0, rootMode)
+	defer pt.close()
+
+	// 发送 IAC NOP（2 字节）+ ? 在同一批次
+	// 旧代码：FF F1 被当作 3 字节 IAC 的前 2 字节，? 被当作第三字节吞掉
+	// 修复后：FF F1 识别为完整的 2 字节命令，? 正常触发帮助
+	if err := pt.write(string([]byte{0xFF, 0xF1, 0x3F})); err != nil {
+		t.Fatalf("write IAC NOP + ? failed: %v", err)
+	}
+	if got, err := pt.readUntil("Echo arguments", 3*time.Second); err != nil {
+		t.Fatalf("2-byte IAC NOP swallowed ? (regression): %v (buf=%q)", err, got)
+	}
+}
+
+// TestSession_TwoByteIAC_SplitAcrossReads 验证 2 字节 IAC 命令跨批次时
+// 仍能正确识别为 2 字节序列，不等待第三字节。
+func TestSession_TwoByteIAC_SplitAcrossReads(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	rootMode.AddCommand("echo", "Echo", func(args []string) string { return "OK\r\n" })
+
+	pt := newPipeTest(t, 0, rootMode)
+	defer pt.close()
+
+	// IAC NOP 分两次发送：FF，然后 F1 + echo\r\n
+	if err := pt.write(string([]byte{0xFF})); err != nil {
+		t.Fatalf("write IAC head failed: %v", err)
+	}
+	time.Sleep(80 * time.Millisecond)
+	// 第二片：NOP 命令字节 + 正常命令
+	if err := pt.write(string([]byte{0xF1}) + "echo\r\n"); err != nil {
+		t.Fatalf("write NOP cmd + echo failed: %v", err)
+	}
+	if got, err := pt.readUntil("OK", 3*time.Second); err != nil {
+		t.Fatalf("2-byte IAC split broke input: %v (buf=%q)", err, got)
+	}
+}
+
+// TestSession_IAC_IAC_EscapedByte 验证 IAC IAC（转义的 0xFF）被正确识别为
+// 2 字节序列，不吞掉后续字节。
+func TestSession_IAC_IAC_EscapedByte(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	rootMode.AddCommand("echo", "Echo", func(args []string) string { return "OK\r\n" })
+
+	pt := newPipeTest(t, 0, rootMode)
+	defer pt.close()
+
+	// IAC IAC (FF FF) + echo\r\n
+	if err := pt.write(string([]byte{0xFF, 0xFF}) + "echo\r\n"); err != nil {
+		t.Fatalf("write IAC IAC + echo failed: %v", err)
+	}
+	if got, err := pt.readUntil("OK", 3*time.Second); err != nil {
+		t.Fatalf("IAC IAC broke input: %v (buf=%q)", err, got)
+	}
+}
+
+// TestSession_MultipleTwoByteIACThenQuestionMark 验证连续多个 2 字节 IAC 命令
+// 后 ? 仍正常工作（模拟客户端周期性发送 NOP/GA 等）。
+func TestSession_MultipleTwoByteIACThenQuestionMark(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	rootMode.AddCommand("show", "Show status", func(args []string) string { return "" })
+
+	pt := newPipeTest(t, 0, rootMode)
+	defer pt.close()
+
+	// 连续发送 5 个 2 字节 IAC 命令（NOP + GA 交替），每次后跟一个普通字符
+	// 模拟客户端在交互中周期性发送 keep-alive / GA
+	for k := 0; k < 5; k++ {
+		cmd := byte(0xF1) // NOP
+		if k%2 == 1 {
+			cmd = 0xF9 // GA
+		}
+		// 发送 2 字节 IAC + 一个普通字符（不应被吞）
+		if err := pt.write(string([]byte{0xFF, cmd})); err != nil {
+			t.Fatalf("write 2-byte IAC #%d failed: %v", k, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// 最后发送 ?，应正常触发帮助
+	if err := pt.write("?"); err != nil {
+		t.Fatalf("write ? failed: %v", err)
+	}
+	if got, err := pt.readUntil("Show status", 3*time.Second); err != nil {
+		t.Fatalf("? failed after multiple 2-byte IAC (regression): %v (buf=%q)", err, got)
+	}
+}

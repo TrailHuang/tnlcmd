@@ -151,6 +151,37 @@ func (s *Session) Handle(ctx context.Context) error {
 	}
 }
 
+// inputState 标识输入解析状态机的当前状态，用于正确处理跨 read 批次的
+// Telnet IAC 序列与 ANSI ESC 方向键序列。
+//
+// 关键修复：Telnet IAC 命令长度不固定——NOP/GA/AYT/EC 等为 2 字节，
+// WILL/WONT/DO/DONT 为 3 字节。旧实现（及 pending 缓冲方案）假设恒为 3 字节，
+// 导致 2 字节 IAC 命令后的第一个用户字节（常是 ?）被误当作第三字节吞掉。
+type inputState uint8
+
+const (
+	stNormal     inputState = iota // 正常输入处理
+	stIAC                          // 收到 IAC(0xFF)，等待命令字节
+	stIACOpt                       // 收到 WILL/WONT/DO/DONT，等待选项字节（第三字节）
+	stSB                           // 子协商数据流中，等待 IAC SE
+	stSBIAC                        // 子协商中收到 IAC，等待 SE 或继续
+	stESC                          // 收到 ESC(0x1B)，等待 '['
+	stESCBracket                   // 收到 ESC [，等待方向键字母
+)
+
+// isIAC2ByteCmd 判断 IAC 命令字节是否为 2 字节序列（无选项字节）。
+// 0xF1-0xF9: NOP/DM/BRK/IP/AO/AYT/EC/EL/GA
+// 0xFF: IAC IAC（转义的 0xFF）
+func isIAC2ByteCmd(cmd byte) bool {
+	return cmd == 0xFF || (cmd >= 0xF1 && cmd <= 0xF9)
+}
+
+// isIAC3ByteCmd 判断 IAC 命令字节是否为 3 字节序列（带选项字节）。
+// 0xFB-0xFE: WILL/WONT/DO/DONT
+func isIAC3ByteCmd(cmd byte) bool {
+	return cmd >= 0xFB && cmd <= 0xFE
+}
+
 // readLine 读取一行输入
 func (s *Session) readLine() (string, error) {
 	var buffer strings.Builder
@@ -168,10 +199,8 @@ func (s *Session) readLine() (string, error) {
 		return "", err
 	}
 
-	// pending 用于缓存跨 read 批次的 Telnet IAC 序列与 ANSI ESC 序列。
-	// 旧实现仅在「序列完整且位于同一批次」时才跳过，序列跨批次时后续字节会被
-	// 误当作普通输入处理，导致协议状态错乱（多次交互后 ?/方向键等失灵）。
-	var pending []byte
+	// 状态机：跨 read 批次保持解析状态，正确处理变长 IAC / ESC 序列
+	ps := stNormal
 
 	for {
 		if s.writeErr != nil {
@@ -193,31 +222,93 @@ func (s *Session) readLine() (string, error) {
 		for i := 0; i < n; i++ {
 			b := data[i]
 
-			// 处理telnet协议选项协商：IAC + 命令 + 选项（3字节）
-			if b == 0xFF { // IAC (Interpret As Command)
-				// 收集本批剩余 + pending 凑齐 3 字节
-				seq := append(pending, data[i:]...)
-				if len(seq) >= 3 {
-					// 完整 IAC 序列，静默跳过
-					pending = nil
-					i += 2 // 跳过命令、选项两个字节（外层 for 还会 +1）
+			// 优先处理多字节序列状态机
+			switch ps {
+			case stIAC:
+				// b 是 IAC 命令字节
+				switch {
+				case isIAC3ByteCmd(b): // WILL/WONT/DO/DONT → 还需选项字节
+					ps = stIACOpt
+				case b == 0xFA: // SB → 子协商开始
+					ps = stSB
+				default: // 2 字节命令（NOP/GA/AYT/EC/IAC-IAC 等）→ 完成
+					ps = stNormal
+				}
+				continue
+			case stIACOpt:
+				// b 是选项字节，序列完成，丢弃
+				ps = stNormal
+				continue
+			case stSB:
+				// 子协商数据流，跳过直到 IAC
+				if b == 0xFF {
+					ps = stSBIAC
+				}
+				continue
+			case stSBIAC:
+				// 子协商中的 IAC，b==0xF0(SE) 结束，否则继续
+				if b == 0xF0 {
+					ps = stNormal
+				} else {
+					ps = stSB
+				}
+				continue
+			case stESC:
+				if b == '[' {
+					ps = stESCBracket
+				} else {
+					ps = stNormal // 非 '[' 的 ESC 序列，忽略
+				}
+				continue
+			case stESCBracket:
+				ps = stNormal
+				switch b {
+				case 'A': // Up arrow - 浏览更早的历史命令
+					if s.history.Len() == 0 {
+						buffer.Reset()
+						s.redrawLine("")
+					} else {
+						if historyIndex < 0 {
+							historyIndex = s.history.Len() - 1
+						} else if historyIndex > 0 {
+							historyIndex--
+						}
+						cmd := s.history.Get(historyIndex)
+						buffer.Reset()
+						buffer.WriteString(cmd)
+						s.redrawLine(buffer.String())
+					}
+					continue
+				case 'B': // Down arrow - 浏览更新的历史命令
+					if historyIndex >= 0 && historyIndex < s.history.Len()-1 {
+						historyIndex++
+						cmd := s.history.Get(historyIndex)
+						buffer.Reset()
+						buffer.WriteString(cmd)
+						s.redrawLine(buffer.String())
+					} else if historyIndex == s.history.Len()-1 {
+						historyIndex = -1
+						buffer.Reset()
+						s.redrawLine("")
+					}
+					continue
+				default:
+					// 其他 ESC [ X 序列，忽略
 					continue
 				}
-				// 不完整，缓存等待下一批
-				pending = seq
-				i = n - 1 // 跳出内层 for，进入下一次 read
-				break
 			}
 
-			// 若上一批遗留了不完整的 IAC，则当前字节是其延续
-			if len(pending) > 0 && pending[0] == 0xFF {
-				pending = append(pending, b)
-				if len(pending) >= 3 {
-					pending = nil // 完整，丢弃
-				}
+			// stNormal：检测多字节序列开头
+			if b == 0xFF { // IAC
+				ps = stIAC
+				continue
+			}
+			if b == 0x1B { // ESC
+				ps = stESC
 				continue
 			}
 
+			// 单字节命令与可打印字符
 			switch b {
 			case 0x03: // Ctrl+C
 				return "", io.EOF
@@ -243,55 +334,6 @@ func (s *Session) readLine() (string, error) {
 				s.writerWrite("\r\n")
 				s.flushWriter()
 				return buffer.String(), nil
-			case 0x1B: // Escape sequence - 可能是箭头键
-				// 收集本批剩余 + pending 凑齐 ESC [ X（3字节）
-				seq := append(pending, data[i:]...)
-				if len(seq) >= 3 {
-					pending = nil
-					if seq[1] == '[' {
-						switch seq[2] {
-						case 'A': // Up arrow - 浏览更早的历史命令
-							if s.history.Len() == 0 {
-								// 没有历史命令时，保持当前输入为空
-								buffer.Reset()
-								s.redrawLine("")
-							} else {
-								if historyIndex < 0 {
-									historyIndex = s.history.Len() - 1
-								} else if historyIndex > 0 {
-									historyIndex--
-								}
-								cmd := s.history.Get(historyIndex)
-								buffer.Reset()
-								buffer.WriteString(cmd)
-								s.redrawLine(buffer.String())
-							}
-							i += 2 // 跳过 '['、字母（外层 for 还会 +1）
-							continue
-						case 'B': // Down arrow - 浏览更新的历史命令
-							if historyIndex >= 0 && historyIndex < s.history.Len()-1 {
-								historyIndex++
-								cmd := s.history.Get(historyIndex)
-								buffer.Reset()
-								buffer.WriteString(cmd)
-								s.redrawLine(buffer.String())
-							} else if historyIndex == s.history.Len()-1 {
-								historyIndex = -1
-								buffer.Reset()
-								s.redrawLine("")
-							}
-							i += 2 // 跳过 '['、字母
-							continue
-						}
-					}
-					// 其他 ESC 序列（非方向键）也跳过，避免污染输入
-					i += 2
-					continue
-				}
-				// 不完整，缓存等待下一批
-				pending = seq
-				i = n - 1
-				break
 			default:
 				if b >= 0x20 && b <= 0x7E {
 					buffer.WriteByte(b)
