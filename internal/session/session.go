@@ -32,13 +32,22 @@ type Session struct {
 	completer  *completer.CommandCompleter
 	context    *mode.CommandContext
 	prompt     string
+
+	// writeErr 记录最近一次写入错误。一旦置位，后续 writerWrite/flushWriter 直接返回该错误，
+	// 主循环据此及时退出，避免向已断开的连接继续写入。
+	writeErr error
 }
 
 // NewSession 创建新的会话
 func NewSession(conn net.Conn, config *types.Config, commands map[string]types.CommandInfo) *Session {
-	// 创建命令上下文
+	// 创建命令上下文（使用安全类型断言，RootMode 类型不匹配时回退到临时根模式）
+	rootMode, ok := config.RootMode.(*mode.CommandMode)
+	if !ok || rootMode == nil {
+		slog.Warn("invalid RootMode type in NewSession, fallback to empty root mode", "type", fmt.Sprintf("%T", config.RootMode))
+		rootMode = mode.NewCommandMode("root", config.Prompt, "fallback root mode")
+	}
 	context := &mode.CommandContext{
-		CurrentMode: config.RootMode.(*mode.CommandMode),
+		CurrentMode: rootMode,
 	}
 
 	s := &Session{
@@ -100,7 +109,9 @@ func (s *Session) updateCommands() {
 // Handle 处理会话
 func (s *Session) Handle(ctx context.Context) error {
 	// 发送欢迎消息
-	s.sendWelcomeMessage()
+	if err := s.sendWelcomeMessage(); err != nil {
+		return err
+	}
 
 	for {
 		select {
@@ -126,6 +137,10 @@ func (s *Session) Handle(ctx context.Context) error {
 
 		s.history.Add(line)
 		err = s.processCommand(line)
+		// 写入失败（如客户端断开）→ 立即退出会话，避免向死连接继续写入
+		if s.writeErr != nil {
+			return s.writeErr
+		}
 		if err == io.EOF {
 			return nil
 		}
@@ -141,11 +156,28 @@ func (s *Session) readLine() (string, error) {
 	var buffer strings.Builder
 	var historyIndex int = -1
 
+	if s.writeErr != nil {
+		return "", s.writeErr
+	}
+
 	// 显示初始提示符
-	s.writerWrite(s.prompt)
-	s.flushWriter()
+	if err := s.writerWrite(s.prompt); err != nil {
+		return "", err
+	}
+	if err := s.flushWriter(); err != nil {
+		return "", err
+	}
+
+	// pending 用于缓存跨 read 批次的 Telnet IAC 序列与 ANSI ESC 序列。
+	// 旧实现仅在「序列完整且位于同一批次」时才跳过，序列跨批次时后续字节会被
+	// 误当作普通输入处理，导致协议状态错乱（多次交互后 ?/方向键等失灵）。
+	var pending []byte
 
 	for {
+		if s.writeErr != nil {
+			return "", s.writeErr
+		}
+
 		// 使用缓冲区读取，更好地处理telnet协议
 		data := make([]byte, 1024)
 		n, err := s.reader.Read(data)
@@ -161,13 +193,29 @@ func (s *Session) readLine() (string, error) {
 		for i := 0; i < n; i++ {
 			b := data[i]
 
-			// 处理telnet协议选项协商
+			// 处理telnet协议选项协商：IAC + 命令 + 选项（3字节）
 			if b == 0xFF { // IAC (Interpret As Command)
-				// 跳过telnet命令序列（3字节）
-				if i+2 < n {
-					i += 2
+				// 收集本批剩余 + pending 凑齐 3 字节
+				seq := append(pending, data[i:]...)
+				if len(seq) >= 3 {
+					// 完整 IAC 序列，静默跳过
+					pending = nil
+					i += 2 // 跳过命令、选项两个字节（外层 for 还会 +1）
 					continue
 				}
+				// 不完整，缓存等待下一批
+				pending = seq
+				i = n - 1 // 跳出内层 for，进入下一次 read
+				break
+			}
+
+			// 若上一批遗留了不完整的 IAC，则当前字节是其延续
+			if len(pending) > 0 && pending[0] == 0xFF {
+				pending = append(pending, b)
+				if len(pending) >= 3 {
+					pending = nil // 完整，丢弃
+				}
+				continue
 			}
 
 			switch b {
@@ -196,10 +244,12 @@ func (s *Session) readLine() (string, error) {
 				s.flushWriter()
 				return buffer.String(), nil
 			case 0x1B: // Escape sequence - 可能是箭头键
-				// 检查是否有足够的字节用于转义序列
-				if i+2 < n {
-					if data[i+1] == '[' {
-						switch data[i+2] {
+				// 收集本批剩余 + pending 凑齐 ESC [ X（3字节）
+				seq := append(pending, data[i:]...)
+				if len(seq) >= 3 {
+					pending = nil
+					if seq[1] == '[' {
+						switch seq[2] {
 						case 'A': // Up arrow - 浏览更早的历史命令
 							if s.history.Len() == 0 {
 								// 没有历史命令时，保持当前输入为空
@@ -216,7 +266,7 @@ func (s *Session) readLine() (string, error) {
 								buffer.WriteString(cmd)
 								s.redrawLine(buffer.String())
 							}
-							i += 2 // 跳过已处理的转义序列字节
+							i += 2 // 跳过 '['、字母（外层 for 还会 +1）
 							continue
 						case 'B': // Down arrow - 浏览更新的历史命令
 							if historyIndex >= 0 && historyIndex < s.history.Len()-1 {
@@ -230,11 +280,18 @@ func (s *Session) readLine() (string, error) {
 								buffer.Reset()
 								s.redrawLine("")
 							}
-							i += 2 // 跳过已处理的转义序列字节
+							i += 2 // 跳过 '['、字母
 							continue
 						}
 					}
+					// 其他 ESC 序列（非方向键）也跳过，避免污染输入
+					i += 2
+					continue
 				}
+				// 不完整，缓存等待下一批
+				pending = seq
+				i = n - 1
+				break
 			default:
 				if b >= 0x20 && b <= 0x7E {
 					buffer.WriteByte(b)
@@ -313,9 +370,10 @@ func (s *Session) processCommand(cmd string) error {
 						return nil
 					}
 
-					// 规范化换行符，确保使用 \r\n
-					normalizedResult := normalizeLineEndings(result)
-					s.writerWrite(normalizedResult)
+					// 输出命令结果（按 PageSize 分页，若启用）
+					if err := s.writeResult(result); err != nil {
+						return err
+					}
 				}
 
 				s.updateCommands()
@@ -337,6 +395,101 @@ func (s *Session) processCommand(cmd string) error {
 	s.writerWrite(fmt.Sprintf("Unknown command: %s\r\n", strings.Join(parts, " ")))
 	s.writerWrite("Type '?' for available commands\r\n")
 	return nil
+}
+
+// writeResult 写入命令处理结果。当 PageSize > 0 时按行分页，每页之间显示
+// "--More-- (NN%)" 提示并等待用户按键：Space/Enter/方向键 → 下一页；
+// 'q'/'Q' → 中止剩余输出（回到提示符）；Ctrl+C → 中止并关闭连接。
+// 写入失败时返回错误，由调用方退出会话。
+func (s *Session) writeResult(result string) error {
+	normalized := normalizeLineEndings(result)
+
+	// 禁用分页：一次性输出全部内容
+	if s.config.PageSize <= 0 {
+		return s.writerWrite(normalized)
+	}
+
+	// 分页输出：按 \r\n 拆分，逐行写入，每 PageSize 行插入一次 --More--
+	lines := strings.Split(normalized, "\r\n")
+	hasTrailingNL := strings.HasSuffix(normalized, "\r\n")
+	// strings.Split 对 "a\r\n" 返回 ["a",""]，去掉末尾空串以便正确统计行数
+	if hasTrailingNL && len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+
+	page := s.config.PageSize
+	for idx, line := range lines {
+		isLastLine := idx == len(lines)-1
+
+		if err := s.writerWrite(line); err != nil {
+			return err
+		}
+		// 行尾分隔符：除非这是最后一行且原文无尾随换行
+		if !(isLastLine && !hasTrailingNL) {
+			if err := s.writerWrite("\r\n"); err != nil {
+				return err
+			}
+		}
+
+		// 每页末尾且非最后一行 → 显示 --More-- 并等待按键
+		if (idx+1)%page == 0 && !isLastLine {
+			percent := (idx + 1) * 100 / len(lines)
+			if err := s.writerWrite(fmt.Sprintf("  --More-- (%d%%)", percent)); err != nil {
+				return err
+			}
+			key, err := s.readPagingKey()
+			// 无论用户按什么，先清除 --More-- 行
+			if werr := s.writerWrite("\r\x1b[K"); werr != nil {
+				return werr
+			}
+			if err != nil {
+				return err
+			}
+			switch key {
+			case 'q', 'Q':
+				// 中止剩余输出，回到提示符
+				return nil
+			case 0x03: // Ctrl+C → 中止并关闭连接
+				return io.EOF
+			}
+			// Space / Enter / 方向键 / 其他 → 继续下一页
+		}
+	}
+	return nil
+}
+
+// readPagingKey 在分页提示后读取用户的一个按键，跳过 Telnet IAC 序列与 ANSI 方向键序列。
+// 方向键（ESC [ X）视为"继续翻页"（返回空格的语义）。
+func (s *Session) readPagingKey() (byte, error) {
+	for {
+		b, err := s.reader.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		switch b {
+		case 0xFF: // IAC，跳过 2 字节 telnet 协商序列
+			if _, err := s.reader.ReadByte(); err != nil {
+				return 0, err
+			}
+			if _, err := s.reader.ReadByte(); err != nil {
+				return 0, err
+			}
+			continue
+		case 0x1B: // ESC，可能是方向键序列 ESC [ X
+			if _, err := s.reader.ReadByte(); err != nil { // 读取 '['
+				return 0, err
+			}
+			if _, err := s.reader.ReadByte(); err != nil { // 读取字母
+				return 0, err
+			}
+			return ' ', nil // 方向键 → 继续翻页
+		default:
+			return b, nil
+		}
+	}
 }
 
 // validateCommandParameters 验证命令参数数量和值是否正确
@@ -424,15 +577,33 @@ func (s *Session) showCompletions(completions []string) {
 	s.flushWriter()
 }
 
-// writerWrite 写入数据（自动 flush 以确保即时发送，匹配旧版直接 conn.Write 的行为）
-func (s *Session) writerWrite(data string) {
-	s.writer.WriteString(data)
-	s.writer.Flush()
+// writerWrite 写入数据（自动 flush 以确保即时发送，匹配旧版直接 conn.Write 的行为）。
+// 返回写入/flush 过程中的错误，并记入 s.writeErr 使主循环能及时退出。
+func (s *Session) writerWrite(data string) error {
+	if s.writeErr != nil {
+		return s.writeErr
+	}
+	if _, err := s.writer.WriteString(data); err != nil {
+		s.writeErr = err
+		return err
+	}
+	if err := s.writer.Flush(); err != nil {
+		s.writeErr = err
+		return err
+	}
+	return nil
 }
 
 // flushWriter 刷新写入缓冲区
-func (s *Session) flushWriter() {
-	s.writer.Flush()
+func (s *Session) flushWriter() error {
+	if s.writeErr != nil {
+		return s.writeErr
+	}
+	if err := s.writer.Flush(); err != nil {
+		s.writeErr = err
+		return err
+	}
+	return nil
 }
 
 // UpdatePrompt 更新会话的提示符
@@ -466,8 +637,8 @@ func normalizeLineEndings(text string) string {
 }
 
 // sendWelcomeMessage 发送欢迎消息
-func (s *Session) sendWelcomeMessage() {
-	s.writerWrite(s.config.WelcomeMsg)
+func (s *Session) sendWelcomeMessage() error {
+	return s.writerWrite(s.config.WelcomeMsg)
 }
 
 // enableTelnetCharacterMode 启用telnet字符模式

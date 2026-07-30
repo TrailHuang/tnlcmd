@@ -41,6 +41,7 @@ type Config struct {
 	Port       int
 	WelcomeMsg string
 	MaxHistory int
+	PageSize   int          // 分页大小（行数）；<=0 表示禁用分页，一次性输出全部内容
 	logger     *slog.Logger // 可选：自定义日志器，nil 时使用 slog.Default()
 	RootMode   interface{}  // 使用 interface{} 避免循环导入
 }

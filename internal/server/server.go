@@ -115,17 +115,18 @@ func (ts *TelnetServer) handleConnection(conn net.Conn) {
 	// 使用服务器中的上下文（如果可用）
 	var context *mode.CommandContext
 	if ts.context != nil {
-		// 复制上下文，但每个连接使用独立的实例
-		context = &mode.CommandContext{
-			CurrentMode: ts.context.CurrentMode,
-			Path:        make([]string, len(ts.context.Path)),
-			CommandTree: ts.context.CommandTree,
-		}
-		copy(context.Path, ts.context.Path)
+		// 每个连接使用独立的上下文副本，避免会话间共享可变状态
+		context = ts.context.Clone()
 	} else {
-		// 向后兼容：创建新的上下文
+		// 向后兼容：从 RootMode 创建新的上下文（使用安全类型断言）
+		rootMode, ok := ts.config.RootMode.(*mode.CommandMode)
+		if !ok || rootMode == nil {
+			slog.Warn("invalid RootMode type, closing connection", "type", fmt.Sprintf("%T", ts.config.RootMode))
+			conn.Close()
+			return
+		}
 		context = &mode.CommandContext{
-			CurrentMode: ts.config.RootMode.(*mode.CommandMode),
+			CurrentMode: rootMode,
 			Path:        []string{},
 		}
 	}

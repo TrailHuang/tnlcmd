@@ -41,6 +41,7 @@ func NewCmdLine(config *Config) *CmdLine {
 			Port:       2323,
 			WelcomeMsg: "Welcome to Command Line Interface!\r\nType '?' for available commands.\r\n",
 			MaxHistory: 100,
+			PageSize:   24,
 		}
 	}
 
@@ -151,6 +152,12 @@ func (c *CmdLine) SetConfig(key, value string) error {
 			return fmt.Errorf("invalid port value %q: %w", value, err)
 		}
 		c.config.Port = v
+	case "pagesize":
+		v, err := strconv.Atoi(value)
+		if err != nil || v < 0 {
+			return fmt.Errorf("invalid pagesize value %q: must be a non-negative integer", value)
+		}
+		c.config.PageSize = v
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}

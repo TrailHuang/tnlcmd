@@ -95,6 +95,23 @@ func (c *CommandContext) ChangeMode(newMode *CommandMode) {
 	c.Path = path
 }
 
+// Clone 创建当前上下文的独立副本。
+// Path 切片会被深拷贝，确保各会话对路径的修改互不影响；
+// CurrentMode 保持共享指针——命令树在 Start 后为只读，
+// 模式切换仅重新赋值本字段，不会并发 mutate 模式对象本身，因此共享是安全的。
+func (c *CommandContext) Clone() *CommandContext {
+	if c == nil {
+		return nil
+	}
+	path := make([]string, len(c.Path))
+	copy(path, c.Path)
+	return &CommandContext{
+		CurrentMode: c.CurrentMode,
+		Path:        path,
+		CommandTree: c.CommandTree,
+	}
+}
+
 // GetAvailableCommands 获取当前模式下可用的命令
 func (c *CommandContext) GetAvailableCommands() map[string]types.CommandInfo {
 	commands := make(map[string]types.CommandInfo)

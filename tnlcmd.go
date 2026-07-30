@@ -62,5 +62,6 @@ func DefaultConfig() *Config {
 		Port:       2323,
 		WelcomeMsg: "Welcome to Command Line Interface!\r\nType '?' for available commands.\r\n",
 		MaxHistory: 100,
+		PageSize:   24,
 	}
 }
