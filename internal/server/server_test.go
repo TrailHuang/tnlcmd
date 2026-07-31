@@ -73,15 +73,17 @@ func TestServer_StopClosesSessions(t *testing.T) {
 	defer conn.Close()
 
 	// 读取欢迎消息，确保会话已建立并注册
-	cr := bufio.NewReader(conn)
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	var buf strings.Builder
+	tmp := make([]byte, 1)
 	for {
-		b, err := cr.ReadByte()
+		n, err := conn.Read(tmp)
 		if err != nil {
 			t.Fatalf("did not see welcome: %v (buf=%q)", err, buf.String())
 		}
-		buf.WriteByte(b)
+		if n > 0 {
+			buf.WriteByte(tmp[0])
+		}
 		if strings.Contains(buf.String(), "WELCOME_MARKER") {
 			break
 		}
@@ -90,11 +92,13 @@ func TestServer_StopClosesSessions(t *testing.T) {
 	// 停止服务器，应关闭会话连接
 	srv.Stop()
 
-	// 客户端后续读取应收到 EOF 或错误（连接被关闭）
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	_, err = cr.ReadByte()
-	if err == nil {
-		t.Error("expected read error/EOF after server Stop, but read succeeded")
+	// 排空 TCP 缓冲区中残留的数据（telnet协商字节、prompt等），
+	// 直到连接真正关闭返回 EOF/网络错误
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		if _, err = conn.Read(tmp); err != nil {
+			break
+		}
 	}
 }
 

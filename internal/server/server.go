@@ -25,6 +25,7 @@ type TelnetServer struct {
 	mu          sync.RWMutex
 	ctx         context.Context
 	cancel      context.CancelFunc
+	wg          sync.WaitGroup // 跟踪活跃的 session goroutine
 }
 
 // NewTelnetServer 创建新的telnet服务器
@@ -87,6 +88,9 @@ func (ts *TelnetServer) Stop() {
 		delete(ts.sessions, conn)
 	}
 	ts.mu.Unlock()
+
+	// 等待所有 session goroutine 退出，确保连接已关闭
+	ts.wg.Wait()
 }
 
 // acceptConnections 接受连接
@@ -112,6 +116,9 @@ func (ts *TelnetServer) acceptConnections() {
 
 // handleConnection 处理连接
 func (ts *TelnetServer) handleConnection(conn net.Conn) {
+	ts.wg.Add(1)
+	defer ts.wg.Done()
+
 	// 使用服务器中的上下文（如果可用）
 	var context *mode.CommandContext
 	if ts.context != nil {

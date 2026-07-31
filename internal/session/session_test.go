@@ -240,7 +240,8 @@ func TestSession_Pagination_DisabledWhenPageSizeZero(t *testing.T) {
 		t.Fatalf("write list failed: %v", err)
 	}
 	// 应一次性看到最后一行 L5
-	if got, err := pt.readUntil("L5", 3*time.Second); err != nil {
+	got, err := pt.readUntil("L5", 3*time.Second)
+	if err != nil {
 		t.Fatalf("did not see L5: %v (buf=%q)", err, got)
 	}
 	if strings.Contains(got, "--More--") {
@@ -323,6 +324,10 @@ func TestSession_ESC_SplitAcrossReads(t *testing.T) {
 	if _, err := pt.readUntil("R1", 3*time.Second); err != nil {
 		t.Fatalf("did not see R1: %v", err)
 	}
+	// 消费掉 prompt，避免后续写入与服务器的 prompt 写入死锁（net.Pipe 无缓冲）
+	if _, err := pt.readUntil("PROMPT_END>", 3*time.Second); err != nil {
+		t.Fatalf("did not see prompt after R1: %v", err)
+	}
 
 	// 发送跨批次的上方向键：ESC，然后 [A
 	if err := pt.write(string([]byte{0x1B})); err != nil {
@@ -331,6 +336,11 @@ func TestSession_ESC_SplitAcrossReads(t *testing.T) {
 	time.Sleep(80 * time.Millisecond)
 	if err := pt.write("[A"); err != nil {
 		t.Fatalf("write ESC tail failed: %v", err)
+	}
+	// 消费掉 ESC 处理后的重绘输出（\r\x1b[KPROMPT_END>cmd1），避免 \r\n
+	// 写入时服务端 redrawLine 的 flush("cmd1") 还在阻塞（net.Pipe 无缓冲）
+	if _, err := pt.readUntil("PROMPT_END>cmd1", 3*time.Second); err != nil {
+		t.Fatalf("did not see redraw output after ESC: %v", err)
 	}
 	// 上方向键应回溯历史，输入行变为 cmd1；按回车执行应再次得到 R1
 	if err := pt.write("\r\n"); err != nil {

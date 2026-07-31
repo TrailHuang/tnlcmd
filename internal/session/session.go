@@ -63,9 +63,6 @@ func NewSession(conn net.Conn, config *types.Config, commands map[string]types.C
 	s.history = history.NewCommandHistory(config.MaxHistory)
 	s.completer = completer.NewCommandCompleterWithContext(s.context)
 
-	// 启用telnet字符模式
-	s.enableTelnetCharacterMode()
-
 	return s
 }
 
@@ -87,9 +84,6 @@ func NewSessionWithContext(conn net.Conn, config *types.Config, context *mode.Co
 	// 更新命令列表
 	s.updateCommands()
 
-	// 启用telnet字符模式
-	s.enableTelnetCharacterMode()
-
 	return s
 }
 
@@ -108,6 +102,9 @@ func (s *Session) updateCommands() {
 
 // Handle 处理会话
 func (s *Session) Handle(ctx context.Context) error {
+	// 启用telnet字符模式
+	s.enableTelnetCharacterMode()
+
 	// 发送欢迎消息
 	if err := s.sendWelcomeMessage(); err != nil {
 		return err
