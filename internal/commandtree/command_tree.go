@@ -291,8 +291,25 @@ func (t *CommandTree) FindCommand(args []string) (*CommandNode, []string, []stri
 	if len(args) == 1 {
 		modeName := args[0]
 		if modeNode, exists := t.ModeCommands[modeName]; exists {
-			// 找到匹配的视图切换命令
+			// 精确匹配到视图切换命令
 			return modeNode, []string{modeName}, []string{}, nil
+		}
+		// 精确匹配失败，尝试唯一前缀匹配视图切换命令
+		var prefixMatchKey string
+		var prefixMatchNode *CommandNode
+		for key, node := range t.ModeCommands {
+			if strings.HasPrefix(key, modeName) {
+				if prefixMatchNode != nil {
+					// 多个匹配，无法唯一确定
+					prefixMatchNode = nil
+					break
+				}
+				prefixMatchKey = key
+				prefixMatchNode = node
+			}
+		}
+		if prefixMatchNode != nil {
+			return prefixMatchNode, []string{prefixMatchKey}, []string{}, nil
 		}
 	}
 
@@ -329,7 +346,27 @@ func (n *CommandNode) findCommand(args []string, path []string, matchArgs []stri
 		}
 	}
 
-	// 如果没有精确匹配，尝试参数节点匹配
+	// 精确匹配失败，尝试唯一前缀匹配命令节点
+	// 如果输入是某个命令的唯一前缀（如 shu -> shutdown），则等价于该命令
+	var prefixMatch *CommandNode
+	for _, child := range n.Children {
+		if (child.Type == NodeTypeCommand || child.Type == NodeTypeModeSwitch) && strings.HasPrefix(child.Name, currentArg) {
+			if prefixMatch != nil {
+				// 多个命令匹配同一前缀，无法唯一确定，放弃前缀匹配
+				prefixMatch = nil
+				break
+			}
+			prefixMatch = child
+		}
+	}
+	if prefixMatch != nil {
+		newPath := make([]string, len(path)+1)
+		copy(newPath, path)
+		newPath[len(path)] = prefixMatch.Name
+		return prefixMatch.findCommand(remainingArgs, newPath, matchArgs)
+	}
+
+	// 前缀匹配也失败，尝试参数节点匹配
 	for _, child := range n.Children {
 		// 参数节点匹配：基于参数类型验证值
 		// 首先检查节点是否是参数节点（非命令节点）
