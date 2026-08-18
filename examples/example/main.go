@@ -32,9 +32,10 @@ func main() {
 		{"echo", "Echo arguments", echoHandler},
 		{"time", "Show current time", timeHandler},
 		{"status", "Show application status", statusHandler},
-		{"show test1", "Show test1 information", showTest1Handler},
+		{"show test1 (all|abb|ddd)", "Show test1 information", showTest1Handler},
 		{"show test2", "Show test2 information", showTest2Handler},
-		{"show time", "Show detailed time information", showTimeHandler},
+		{"show test3 [param]", "Show test3 parameter information", showTest3Handler},
+		{"show time (<1-100>|any) (<1-100>|any)", "Show detailed time information", showTimeHandler},
 		{"show date", "Show current date", showDateHandler},
 		{"set test3 <1-100>", "Set test3 parameter", setTest3Handler},
 	}
@@ -104,6 +105,14 @@ func showTest1Handler(args []string) string {
 func showTest2Handler(args []string) string {
 	message := fmt.Sprintf("Test2 Information:\r\n")
 	message += fmt.Sprintf("  Name: Test Configuration 2\r\n")
+	message += fmt.Sprintf("  Value: %s\r\n", strings.Join(args, " "))
+	return message
+}
+
+// showTest3Handler 显示test3参数信息
+func showTest3Handler(args []string) string {
+	message := fmt.Sprintf("Test3 Information:\r\n")
+	message += fmt.Sprintf("  Name: Test Configuration 3\r\n")
 	message += fmt.Sprintf("  Value: %s\r\n", strings.Join(args, " "))
 	return message
 }
