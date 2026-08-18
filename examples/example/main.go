@@ -38,6 +38,7 @@ func main() {
 		{"show time (<1-100>|any) (<1-100>|any)", "Show detailed time information", showTimeHandler},
 		{"show date", "Show current date", showDateHandler},
 		{"set test3 <1-100>", "Set test3 parameter", setTest3Handler},
+		{"show current (ACLID|any) (DEVID|any)", "Show current time information", showTimeHandler},
 	}
 
 	for _, cmd := range commands {
@@ -133,6 +134,8 @@ func setTest3Handler(args []string) string {
 func showTimeHandler(args []string) string {
 	currentTime := time.Now()
 	message := fmt.Sprintf("Detailed Time Information:\r\n")
+
+	message += fmt.Sprintf("  Value: %s\r\n", strings.Join(args, " "))
 	message += fmt.Sprintf("  Time: %s\r\n", currentTime.Format("15:04:05"))
 	message += fmt.Sprintf("  Timezone: %s\r\n", currentTime.Format("MST"))
 	message += fmt.Sprintf("  Unix Timestamp: %d\r\n", currentTime.Unix())
