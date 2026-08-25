@@ -432,16 +432,16 @@ func (s *Session) processCommand(cmd string) error {
 						return nil
 					}
 				}
-				// 显示当前节点下的子命令选项
+				// 显示当前视图的所有一级命令
 				s.writerWrite(fmt.Sprintf("%% Incomplete command. Possible completions:\r\n"))
-				s.showCommandHelp(cmd)
+				s.showGlobalCommands()
 				return nil
 			}
 		} else if err != nil && strings.Contains(err.Error(), "incomplete command") {
 			// FindCommand 返回 incomplete command，说明输入是有效的命令前缀
-			// 显示该前缀下的子命令选项
+			// 显示当前视图的所有一级命令
 			s.writerWrite(fmt.Sprintf("%% Incomplete command. Possible completions:\r\n"))
-			s.showCommandHelp(cmd)
+			s.showGlobalCommands()
 			return nil
 		}
 	}
@@ -759,16 +759,21 @@ func (s *Session) handleTabCompletion(buffer *strings.Builder) bool {
 	return true
 }
 
-// showCommandHelp 显示命令帮助（处理?键）。
-// 无论当前输入是什么，统一显示当前视图的所有一级命令（含视图切换与内置命令），
-// 逐级子命令的查看由 Tab 补全承担，保证 ? 响应稳定、输出可预期。
-func (s *Session) showCommandHelp(currentInput string) {
+// showGlobalCommands 输出当前视图的所有一级命令列表（含视图切换与内置命令），不重绘输入行。
+func (s *Session) showGlobalCommands() {
 	completions := s.completer.GetCommandTreeSuggestions("")
 	if len(completions) > 0 {
 		s.showCompletions(completions)
 	} else {
 		s.writerWrite("\r\nNo commands available\r\n")
 	}
+}
+
+// showCommandHelp 显示命令帮助（处理?键）。
+// 无论当前输入是什么，统一显示当前视图的所有一级命令（含视图切换与内置命令），
+// 逐级子命令的查看由 Tab 补全承担，保证 ? 响应稳定、输出可预期。
+func (s *Session) showCommandHelp(currentInput string) {
+	s.showGlobalCommands()
 	// 重新绘制当前输入行，使光标回到行尾
 	s.redrawLine(currentInput)
 }
