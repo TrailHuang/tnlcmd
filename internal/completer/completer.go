@@ -239,71 +239,92 @@ func (c *CommandCompleter) GetCurrentViewCommands() []string {
 	// 使用当前视图的可用命令
 	if c.context != nil && c.context.CurrentMode != nil {
 		availableCommands := c.context.GetAvailableCommands()
-	for name := range availableCommands {
-		// 只显示按空格分割的第一段
-		parts := strings.Fields(name)
-		if len(parts) == 0 {
-			continue
+		for name := range availableCommands {
+			// 只显示按空格分割的第一段
+			parts := strings.Fields(name)
+			if len(parts) == 0 {
+				continue
+			}
+			commands = append(commands, parts[0])
 		}
-		commands = append(commands, parts[0])
-	}
 	}
 
 	return commands
 }
 
-// GetCommandTreeSuggestions 基于命令树获取当前节点的所有子节点作为建议
-func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
-	var suggestions []string
+// describeChildren 生成节点下一级候选的显示文本（名称定宽 + 描述）。
+// 对 ModeSwitch 节点会解析到目标视图的命令；对普通命令节点返回其子命令/参数节点。
+func (c *CommandCompleter) describeChildren(node *commandtree.CommandNode) []string {
+	var out []string
+	children := c.resolveChildren(node)
+	for name, child := range children {
+		out = append(out, fmt.Sprintf("%-32s %s", name, child.Description))
+	}
+	return out
+}
 
+// GetCommandTreeSuggestions 基于命令树获取帮助候选，遵循网络设备分级语义：
+//   - 空输入：返回当前视图所有一级命令（含视图切换命令）
+//   - 输入完整关键字（如 "show"）：返回该命令的下一级候选（子命令或参数）
+//   - 输入部分关键字（如 "sho"）：按前缀匹配返回候选
+func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 	// 使用当前视图的命令树
 	if c.context == nil || c.context.CurrentMode == nil || c.context.CurrentMode.CommandTree == nil {
-		return suggestions
+		return nil
 	}
+	tree := c.context.CurrentMode.CommandTree
 
 	inputParts := strings.Fields(input)
-	node := c.context.CurrentMode.CommandTree.Root
-
-	// 遍历到当前层级
-	for i := 0; i < len(inputParts); i++ {
-		if child, exists := node.Children[inputParts[i]]; exists {
-			node = child
-		} else {
-			// 检查是否是参数节点匹配
-			paramMatched := false
+	node := tree.Root
+	lastPart := ""
+	if len(inputParts) > 0 {
+		lastPart = inputParts[len(inputParts)-1]
+		// 导航到最后一个关键字之前的父节点
+		for i := 0; i < len(inputParts)-1; i++ {
+			token := inputParts[i]
+			if child, ok := node.Children[token]; ok {
+				node = child
+				continue
+			}
+			// 尝试参数节点匹配（Enum/Num/String/Optional）
+			matched := false
 			for _, child := range node.Children {
-				// 如果是参数节点，检查参数类型是否匹配
-				if child.Type != types.NodeTypeCommand && commandtree.IsParameterMatch(child, inputParts[i]) {
+				if child.Type != types.NodeTypeCommand && commandtree.IsParameterMatch(child, token) {
 					node = child
-					paramMatched = true
+					matched = true
 					break
 				}
 			}
-			if !paramMatched {
-				// 找不到匹配节点，返回空建议
-				return suggestions
+			if !matched {
+				return nil
 			}
+		}
+		// 最后一个关键字精确命中命令/模式节点 → 下钻显示其下一级
+		if child, ok := node.Children[lastPart]; ok {
+			return c.describeChildren(child)
 		}
 	}
 
-	// 显示当前节点的所有子节点（包括参数节点），返回命令和描述的组合
-	// 如果是 ModeSwitch 节点，解析目标模式的命令
+	// 在当前层级按前缀过滤候选
+	var suggestions []string
+	seen := make(map[string]bool)
 	children := c.resolveChildren(node)
 	for name, child := range children {
-		// 格式："命令名称（固定32宽度左对齐） - 描述"
-		suggestion := fmt.Sprintf("%-32s %s", name, child.Description)
-		suggestions = append(suggestions, suggestion)
+		if strings.HasPrefix(name, lastPart) {
+			suggestions = append(suggestions, fmt.Sprintf("%-32s %s", name, child.Description))
+			seen[name] = true
+		}
 	}
-	//将视图切换命令也添加到建议中（仅在根层级且未作为子节点展示时）
-	if len(inputParts) <= 1 && node.Type != types.NodeTypeModeSwitch {
-		for _, key := range c.context.CurrentMode.CommandTree.GetModeCommandKeys() {
-			// 跳过已作为子节点展示的视图切换命令（避免重复）
-			if _, exists := children[key]; exists {
+
+	// 根层级附加视图切换命令并去重
+	if node.Type != types.NodeTypeModeSwitch && len(inputParts) <= 1 {
+		for _, key := range tree.GetModeCommandKeys() {
+			if seen[key] {
 				continue
 			}
-			if strings.HasPrefix(key, input) {
-				suggestion := fmt.Sprintf("%-32s Switch to %s mode", key, key)
-				suggestions = append(suggestions, suggestion)
+			if strings.HasPrefix(key, lastPart) {
+				suggestions = append(suggestions, fmt.Sprintf("%-32s Switch to %s mode", key, key))
+				seen[key] = true
 			}
 		}
 	}
