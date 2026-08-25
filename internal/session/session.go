@@ -3,16 +3,19 @@ package session
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/TrailHuang/tnlcmd/internal/commandtree"
 	"github.com/TrailHuang/tnlcmd/internal/completer"
+	"github.com/TrailHuang/tnlcmd/internal/debuglog"
 	"github.com/TrailHuang/tnlcmd/internal/history"
 	"github.com/TrailHuang/tnlcmd/internal/mode"
 	"github.com/TrailHuang/tnlcmd/pkg/types"
@@ -84,6 +87,15 @@ func NewSessionWithContext(conn net.Conn, config *types.Config, context *mode.Co
 	// 更新命令列表
 	s.updateCommands()
 
+	if debuglog.Enabled() {
+		debuglog.Debug("session", "session_created",
+			"remote", conn.RemoteAddr().String(),
+			"local", conn.LocalAddr().String(),
+			"prompt", s.prompt,
+			"mode", s.context.CurrentMode.Name,
+		)
+	}
+
 	return s
 }
 
@@ -119,6 +131,12 @@ func (s *Session) Handle(ctx context.Context) error {
 
 		line, err := s.readLine()
 		if err != nil {
+			if debuglog.Enabled() {
+				debuglog.Debug("session", "readline_ended",
+					"remote", s.remoteStr(),
+					"err", err,
+					"goroutines", runtime.NumGoroutine())
+			}
 			if err == io.EOF {
 				return nil
 			}
@@ -127,6 +145,13 @@ func (s *Session) Handle(ctx context.Context) error {
 
 		s.lastActive = time.Now()
 
+		if debuglog.Enabled() {
+			debuglog.Debug("session", "command_line_received",
+				"remote", s.remoteStr(),
+				"line", line,
+				"goroutines", runtime.NumGoroutine())
+		}
+
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -134,6 +159,17 @@ func (s *Session) Handle(ctx context.Context) error {
 
 		s.history.Add(line)
 		err = s.processCommand(line)
+		if debuglog.Enabled() {
+			errStr := ""
+			if err != nil {
+				errStr = err.Error()
+			}
+			debuglog.Debug("session", "command_processed",
+				"remote", s.remoteStr(),
+				"line", line,
+				"err", errStr,
+				"goroutines", runtime.NumGoroutine())
+		}
 		// 写入失败（如客户端断开）→ 立即退出会话，避免向死连接继续写入
 		if s.writeErr != nil {
 			return s.writeErr
@@ -208,11 +244,28 @@ func (s *Session) readLine() (string, error) {
 		data := make([]byte, 1024)
 		n, err := s.reader.Read(data)
 		if err != nil {
+			if debuglog.Enabled() {
+				debuglog.Debug("session", "read_error",
+					"remote", s.remoteStr(),
+					"n", n,
+					"state", ps,
+					"err", err)
+			}
 			return "", err
 		}
 
 		if n == 0 {
 			continue
+		}
+
+		if debuglog.Enabled() {
+			debuglog.Debug("session", "input_received",
+				"remote", s.remoteStr(),
+				"n", n,
+				"state", ps,
+				"buffer_len", buffer.Len(),
+				"first_byte_hex", hex.EncodeToString(data[:1]),
+				"prefix_hex", hex.EncodeToString(data[:minInt(n, 8)]))
 		}
 
 		// 处理接收到的数据
@@ -328,6 +381,12 @@ func (s *Session) readLine() (string, error) {
 				continue
 
 			case 0x0D, 0x0A: // Enter
+				if debuglog.Enabled() {
+					debuglog.Debug("session", "input_line_ready",
+						"remote", s.remoteStr(),
+						"line", buffer.String(),
+						"len", buffer.Len())
+				}
 				s.writerWrite("\r\n")
 				s.flushWriter()
 				return buffer.String(), nil
@@ -637,10 +696,21 @@ func (s *Session) writerWrite(data string) error {
 	}
 	if _, err := s.writer.WriteString(data); err != nil {
 		s.writeErr = err
+		if debuglog.Enabled() {
+			debuglog.Debug("session", "write_error",
+				"remote", s.remoteStr(),
+				"err", err,
+				"data_len", len(data))
+		}
 		return err
 	}
 	if err := s.writer.Flush(); err != nil {
 		s.writeErr = err
+		if debuglog.Enabled() {
+			debuglog.Debug("session", "flush_error",
+				"remote", s.remoteStr(),
+				"err", err)
+		}
 		return err
 	}
 	return nil
@@ -653,6 +723,11 @@ func (s *Session) flushWriter() error {
 	}
 	if err := s.writer.Flush(); err != nil {
 		s.writeErr = err
+		if debuglog.Enabled() {
+			debuglog.Debug("session", "flush_error",
+				"remote", s.remoteStr(),
+				"err", err)
+		}
 		return err
 	}
 	return nil
@@ -693,6 +768,24 @@ func (s *Session) sendWelcomeMessage() error {
 	return s.writerWrite(s.config.WelcomeMsg)
 }
 
+// remoteStr 返回对端地址字符串，连接为 nil 或地址不可用时返回占位符。
+func (s *Session) remoteStr() string {
+	if s.conn != nil {
+		if addr := s.conn.RemoteAddr(); addr != nil {
+			return addr.String()
+		}
+	}
+	return "unknown"
+}
+
+// minInt 返回两个 int 中的较小值。
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // enableTelnetCharacterMode 启用telnet字符模式
 func (s *Session) enableTelnetCharacterMode() {
 	// Telnet选项协商命令
@@ -704,6 +797,11 @@ func (s *Session) enableTelnetCharacterMode() {
 		0xFF, 0xFB, 0x01, // IAC WILL ECHO
 		0xFF, 0xFD, 0x03, // IAC DO SUPPRESS_GO_AHEAD
 		0xFF, 0xFB, 0x03, // IAC WILL SUPPRESS_GO_AHEAD
+	}
+
+	if debuglog.Enabled() {
+		debuglog.Debug("session", "telnet_negotiation_sent",
+			"data_hex", hex.EncodeToString(telnetCommands))
 	}
 
 	s.writer.Write(telnetCommands)
