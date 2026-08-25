@@ -419,15 +419,30 @@ func (s *Session) processCommand(cmd string) error {
 				return nil
 			}
 
-			if s.context != nil && len(parts) == len(matchedPath) {
-				modeName := parts[len(parts)-1]
-				if subMode, exists := s.context.CurrentMode.Children[modeName]; exists {
-					s.context.ChangeMode(subMode)
-					s.writerWrite(fmt.Sprintf("Entering %s mode\r\n", subMode.Description))
-					s.updateCommands()
-					return nil
+			// 如果没有 handler 但有匹配的节点，说明是中间节点（子命令前缀）
+			// 显示该节点下的子命令选项
+			if s.context != nil && node != nil {
+				// 检查是否有子节点可以切换到子模式
+				if len(parts) == len(matchedPath) {
+					modeName := parts[len(parts)-1]
+					if subMode, exists := s.context.CurrentMode.Children[modeName]; exists {
+						s.context.ChangeMode(subMode)
+						s.writerWrite(fmt.Sprintf("Entering %s mode\r\n", subMode.Description))
+						s.updateCommands()
+						return nil
+					}
 				}
+				// 显示当前节点下的子命令选项
+				s.writerWrite(fmt.Sprintf("%% Incomplete command. Possible completions:\r\n"))
+				s.showCommandHelp(cmd)
+				return nil
 			}
+		} else if err != nil && strings.Contains(err.Error(), "incomplete command") {
+			// FindCommand 返回 incomplete command，说明输入是有效的命令前缀
+			// 显示该前缀下的子命令选项
+			s.writerWrite(fmt.Sprintf("%% Incomplete command. Possible completions:\r\n"))
+			s.showCommandHelp(cmd)
+			return nil
 		}
 	}
 
