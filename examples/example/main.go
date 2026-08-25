@@ -32,11 +32,13 @@ func main() {
 		{"echo", "Echo arguments", echoHandler},
 		{"time", "Show current time", timeHandler},
 		{"status", "Show application status", statusHandler},
-		{"show test1", "Show test1 information", showTest1Handler},
+		{"show test1 (all|abb|ddd)", "Show test1 information", showTest1Handler},
 		{"show test2", "Show test2 information", showTest2Handler},
-		{"show time", "Show detailed time information", showTimeHandler},
+		{"show test3 [param]", "Show test3 parameter information", showTest3Handler},
+		{"show time (<1-100>|any) (<1-100>|any)", "Show detailed time information", showTimeHandler},
 		{"show date", "Show current date", showDateHandler},
 		{"set test3 <1-100>", "Set test3 parameter", setTest3Handler},
+		{"show current (ACLID|any) (DEVID|any)", "Show current time information", showTimeHandler},
 	}
 
 	for _, cmd := range commands {
@@ -108,6 +110,14 @@ func showTest2Handler(args []string) string {
 	return message
 }
 
+// showTest3Handler 显示test3参数信息
+func showTest3Handler(args []string) string {
+	message := fmt.Sprintf("Test3 Information:\r\n")
+	message += fmt.Sprintf("  Name: Test Configuration 3\r\n")
+	message += fmt.Sprintf("  Value: %s\r\n", strings.Join(args, " "))
+	return message
+}
+
 // setTest3Handler 设置test3参数
 func setTest3Handler(args []string) string {
 	if len(args) == 0 {
@@ -124,6 +134,8 @@ func setTest3Handler(args []string) string {
 func showTimeHandler(args []string) string {
 	currentTime := time.Now()
 	message := fmt.Sprintf("Detailed Time Information:\r\n")
+
+	message += fmt.Sprintf("  Value: %s\r\n", strings.Join(args, " "))
 	message += fmt.Sprintf("  Time: %s\r\n", currentTime.Format("15:04:05"))
 	message += fmt.Sprintf("  Timezone: %s\r\n", currentTime.Format("MST"))
 	message += fmt.Sprintf("  Unix Timestamp: %d\r\n", currentTime.Unix())

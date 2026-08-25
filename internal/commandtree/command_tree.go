@@ -40,13 +40,20 @@ type CommandNode struct {
 	Parent      *CommandNode
 
 	// 参数特定字段
-	EnumValues []string // 枚举值列表
-	RangeMin   int      // 范围最小值
-	RangeMax   int      // 范围最大值
-	IsRequired bool     // 是否必需参数
+	EnumValues []string    // 枚举值列表
+	EnumRanges []EnumRange // 枚举中嵌入的数值范围，与 EnumValues 按顺序对应
+	RangeMin   int         // 范围最小值
+	RangeMax   int         // 范围最大值
+	IsRequired bool        // 是否必需参数
 
 	// 视图切换特定字段
 	ModeName string // 要切换到的视图名称
+}
+
+// EnumRange 枚举中嵌入的数值范围
+type EnumRange struct {
+	Min int
+	Max int
 }
 
 // PathNode 路径节点，包含节点名称和类型信息
@@ -243,8 +250,36 @@ func (t *CommandTree) parseEnumParam(part string) (*CommandNode, bool) {
 	values := strings.Split(param, "|")
 	node := NewCommandNode(part, NodeTypeEnum, "Enum parameter")
 	node.EnumValues = values
+	node.EnumRanges = make([]EnumRange, len(values))
+	for i, v := range values {
+		v = strings.TrimSpace(v)
+		if min, max, ok := parseInlineRange(v); ok {
+			node.EnumRanges[i] = EnumRange{Min: min, Max: max}
+		}
+	}
 	node.IsRequired = true
 	return node, true
+}
+
+// parseInlineRange 解析形如 <1-100> 的内联范围，若解析成功返回 true
+func parseInlineRange(value string) (int, int, bool) {
+	if !strings.HasPrefix(value, "<") || !strings.HasSuffix(value, ">") {
+		return 0, 0, false
+	}
+	inner := strings.Trim(value, "<>")
+	if !strings.Contains(inner, "-") {
+		return 0, 0, false
+	}
+	parts := strings.Split(inner, "-")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	min, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	max, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return min, max, true
 }
 
 // parseRangeParam 解析数值范围参数
@@ -370,27 +405,26 @@ func (n *CommandNode) findCommand(args []string, path []string, matchArgs []stri
 	for _, child := range n.Children {
 		// 参数节点匹配：基于参数类型验证值
 		// 首先检查节点是否是参数节点（非命令节点）
-		if child.Type != types.NodeTypeCommand {
-			// 可选参数需要特殊处理 - 尝试递归匹配
-			if child.Type == types.NodeTypeOptional {
-				if matchedNode, matchedPath, tmpargs, err := child.findCommand(args, path, matchArgs); err == nil {
-					return matchedNode, matchedPath, tmpargs, nil
-				}
-			} else if IsParameterMatch(child, currentArg) {
-				// 参数节点匹配成功，返回当前节点，剩余参数作为处理函数的参数
-				newPath := make([]string, len(path)+1)
-				copy(newPath, path)
-				newPath[len(path)] = currentArg
-				newMatchArgs := make([]string, len(matchArgs)+1)
-				copy(newMatchArgs, matchArgs)
-				newMatchArgs[len(matchArgs)] = currentArg
-				return child.findCommand(remainingArgs, newPath, newMatchArgs)
+		if child.Type == types.NodeTypeCommand {
+			continue
+		}
+		// 可选参数需要特殊处理 - 尝试递归匹配
+		if child.Type == types.NodeTypeOptional {
+			if matchedNode, matchedPath, tmpargs, err := child.findCommand(args, path, matchArgs); err == nil {
+				return matchedNode, matchedPath, tmpargs, nil
 			}
+		} else if IsParameterMatch(child, currentArg) {
+			// 参数节点匹配成功，返回当前节点，剩余参数作为处理函数的参数
+			return child.findCommand(remainingArgs, append(path, currentArg), append(matchArgs, currentArg))
 		}
 	}
 
 	// 如果没有匹配的子节点，检查当前节点是否有处理函数
 	if n.Handler != nil {
+		// 如果当前节点是可选参数节点且还有参数，将当前参数作为可选参数的值
+		if n.Type == NodeTypeOptional {
+			return n, append(path, currentArg), append(matchArgs, currentArg), nil
+		}
 		// 当前节点有处理函数，但还有未匹配的参数
 		// 将这些参数传递给处理函数
 		return n, path, matchArgs, nil
@@ -650,6 +684,10 @@ func IsParameterMatch(node *CommandNode, input string) bool {
 		if isString(input) {
 			return true
 		}
+	case NodeTypeOptional: // 可选参数，任意非空字符串均匹配
+		if isString(input) {
+			return true
+		}
 	default:
 		// 默认情况下，如果参数名包含输入，则认为匹配
 		return false
@@ -764,7 +802,7 @@ func isValidEnumValue(node *CommandNode, input string) bool {
 	// 从节点描述中提取枚举值
 	// 枚举参数格式如: (on|off|enable|disable)
 	enumValues := extractEnumValues(node.Name)
-	if len(enumValues) == 0 {
+	if len(enumValues) == 0 && len(node.EnumRanges) == 0 {
 		// 如果没有明确的枚举值定义，接受任何输入
 		return true
 	}
@@ -772,6 +810,16 @@ func isValidEnumValue(node *CommandNode, input string) bool {
 	// 检查输入是否在枚举值列表中（不区分大小写）
 	for _, value := range enumValues {
 		if strings.EqualFold(value, input) {
+			return true
+		}
+	}
+
+	// 检查输入是否匹配任一内联数值范围
+	for _, r := range node.EnumRanges {
+		if r.Min == 0 && r.Max == 0 {
+			continue
+		}
+		if num, err := strconv.Atoi(input); err == nil && num >= r.Min && num <= r.Max {
 			return true
 		}
 	}
