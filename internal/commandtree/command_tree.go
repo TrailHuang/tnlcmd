@@ -142,9 +142,8 @@ func (t *CommandTree) getCommandPathNodes(command string) []*CommandNode {
 		return pathNodes
 	}
 
-	// 从根节点开始遍历路径
+	// 从根节点的子节点开始遍历路径（不包含根节点）
 	current := t.Root
-	pathNodes = append(pathNodes, current)
 
 	for _, node := range nodes {
 		if existing, exists := current.Children[node.Name]; exists {
