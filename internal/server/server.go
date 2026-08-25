@@ -191,3 +191,16 @@ func (ts *TelnetServer) UpdateAllSessionsPrompt(prompt string) {
 		session.UpdatePrompt(prompt)
 	}
 }
+
+// Addr 返回服务器的监听地址。
+func (ts *TelnetServer) Addr() string {
+	if ts.listener != nil {
+		return ts.listener.Addr().String()
+	}
+	return ""
+}
+
+// Listener 返回监听器。
+func (ts *TelnetServer) Listener() net.Listener {
+	return ts.listener
+}
