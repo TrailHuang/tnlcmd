@@ -36,7 +36,7 @@ func main() {
 		detailedDesc string
 		handler      func([]string) string
 	}{
-		{"show running-config", "Show running system information", "show configuration\ndisplay running config", showHandler},
+		{name: "show running-config", desc: "Show running system information", detailedDesc: "show configuration\ndisplay running config", handler: showHandler},
 		{"show config", "Show running system information", "show configuration\ndisplay system config", showHandler},
 		{"ping IP", "Send echo messages", "send echo\ntest connectivity", pingHandler},
 		{"clear test1", "Reset functions", "clear test\nreset test1", clearHandler},
