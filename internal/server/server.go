@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/TrailHuang/tnlcmd/internal/commandtree"
+	"github.com/TrailHuang/tnlcmd/internal/debuglog"
 	"github.com/TrailHuang/tnlcmd/internal/mode"
 	"github.com/TrailHuang/tnlcmd/internal/session"
 	"github.com/TrailHuang/tnlcmd/pkg/types"
@@ -105,7 +106,13 @@ func (ts *TelnetServer) acceptConnections() {
 		conn, err := ts.listener.Accept()
 		if err != nil {
 			if ts.ctx.Err() != nil {
+				if debuglog.Enabled() {
+					debuglog.Debug("server", "accept_stopped", "err", err)
+				}
 				return
+			}
+			if debuglog.Enabled() {
+				debuglog.Debug("server", "accept_error", "err", err)
 			}
 			continue
 		}
@@ -118,6 +125,12 @@ func (ts *TelnetServer) acceptConnections() {
 func (ts *TelnetServer) handleConnection(conn net.Conn) {
 	ts.wg.Add(1)
 	defer ts.wg.Done()
+
+	if debuglog.Enabled() {
+		debuglog.Debug("server", "conn_accepted",
+			"remote", conn.RemoteAddr().String(),
+			"local", conn.LocalAddr().String())
+	}
 
 	// 使用服务器中的上下文（如果可用）
 	var context *mode.CommandContext
@@ -150,6 +163,16 @@ func (ts *TelnetServer) handleConnection(conn net.Conn) {
 	err := session.Handle(ts.ctx)
 	if err != nil && err != io.EOF {
 		slog.Warn("session error", "error", err)
+		if debuglog.Enabled() {
+			debuglog.Debug("server", "conn_session_error",
+				"remote", conn.RemoteAddr().String(),
+				"err", err)
+		}
+	}
+	if debuglog.Enabled() {
+		debuglog.Debug("server", "conn_closed",
+			"remote", conn.RemoteAddr().String(),
+			"err", err)
 	}
 
 	// 会话结束，清理

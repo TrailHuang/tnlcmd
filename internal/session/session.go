@@ -3,16 +3,19 @@ package session
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/TrailHuang/tnlcmd/internal/commandtree"
 	"github.com/TrailHuang/tnlcmd/internal/completer"
+	"github.com/TrailHuang/tnlcmd/internal/debuglog"
 	"github.com/TrailHuang/tnlcmd/internal/history"
 	"github.com/TrailHuang/tnlcmd/internal/mode"
 	"github.com/TrailHuang/tnlcmd/pkg/types"
@@ -84,6 +87,15 @@ func NewSessionWithContext(conn net.Conn, config *types.Config, context *mode.Co
 	// 更新命令列表
 	s.updateCommands()
 
+	if debuglog.Enabled() {
+		debuglog.Debug("session", "session_created",
+			"remote", conn.RemoteAddr().String(),
+			"local", conn.LocalAddr().String(),
+			"prompt", s.prompt,
+			"mode", s.context.CurrentMode.Name,
+		)
+	}
+
 	return s
 }
 
@@ -119,6 +131,12 @@ func (s *Session) Handle(ctx context.Context) error {
 
 		line, err := s.readLine()
 		if err != nil {
+			if debuglog.Enabled() {
+				debuglog.Debug("session", "readline_ended",
+					"remote", s.remoteStr(),
+					"err", err,
+					"goroutines", runtime.NumGoroutine())
+			}
 			if err == io.EOF {
 				return nil
 			}
@@ -127,6 +145,13 @@ func (s *Session) Handle(ctx context.Context) error {
 
 		s.lastActive = time.Now()
 
+		if debuglog.Enabled() {
+			debuglog.Debug("session", "command_line_received",
+				"remote", s.remoteStr(),
+				"line", line,
+				"goroutines", runtime.NumGoroutine())
+		}
+
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -134,6 +159,17 @@ func (s *Session) Handle(ctx context.Context) error {
 
 		s.history.Add(line)
 		err = s.processCommand(line)
+		if debuglog.Enabled() {
+			errStr := ""
+			if err != nil {
+				errStr = err.Error()
+			}
+			debuglog.Debug("session", "command_processed",
+				"remote", s.remoteStr(),
+				"line", line,
+				"err", errStr,
+				"goroutines", runtime.NumGoroutine())
+		}
 		// 写入失败（如客户端断开）→ 立即退出会话，避免向死连接继续写入
 		if s.writeErr != nil {
 			return s.writeErr
@@ -208,11 +244,28 @@ func (s *Session) readLine() (string, error) {
 		data := make([]byte, 1024)
 		n, err := s.reader.Read(data)
 		if err != nil {
+			if debuglog.Enabled() {
+				debuglog.Debug("session", "read_error",
+					"remote", s.remoteStr(),
+					"n", n,
+					"state", ps,
+					"err", err)
+			}
 			return "", err
 		}
 
 		if n == 0 {
 			continue
+		}
+
+		if debuglog.Enabled() {
+			debuglog.Debug("session", "input_received",
+				"remote", s.remoteStr(),
+				"n", n,
+				"state", ps,
+				"buffer_len", buffer.Len(),
+				"first_byte_hex", hex.EncodeToString(data[:1]),
+				"prefix_hex", hex.EncodeToString(data[:minInt(n, 8)]))
 		}
 
 		// 处理接收到的数据
@@ -328,6 +381,12 @@ func (s *Session) readLine() (string, error) {
 				continue
 
 			case 0x0D, 0x0A: // Enter
+				if debuglog.Enabled() {
+					debuglog.Debug("session", "input_line_ready",
+						"remote", s.remoteStr(),
+						"line", buffer.String(),
+						"len", buffer.Len())
+				}
 				s.writerWrite("\r\n")
 				s.flushWriter()
 				return buffer.String(), nil
@@ -419,15 +478,28 @@ func (s *Session) processCommand(cmd string) error {
 				return nil
 			}
 
-			if s.context != nil && len(parts) == len(matchedPath) {
-				modeName := parts[len(parts)-1]
-				if subMode, exists := s.context.CurrentMode.Children[modeName]; exists {
-					s.context.ChangeMode(subMode)
-					s.writerWrite(fmt.Sprintf("Entering %s mode\r\n", subMode.Description))
-					s.updateCommands()
-					return nil
+			// 如果没有 handler 但有匹配的节点，说明是中间节点（子命令前缀）
+			// 显示该节点下的子命令选项
+			if s.context != nil && node != nil {
+				// 检查是否有子节点可以切换到子模式
+				if len(parts) == len(matchedPath) {
+					modeName := parts[len(parts)-1]
+					if subMode, exists := s.context.CurrentMode.Children[modeName]; exists {
+						s.context.ChangeMode(subMode)
+						s.writerWrite(fmt.Sprintf("Entering %s mode\r\n", subMode.Description))
+						s.updateCommands()
+						return nil
+					}
 				}
+				// 未输入完整命令，按设备规范提示不完整
+				s.writerWrite(fmt.Sprintf("%% Incomplete command. \r\n"))
+				return nil
 			}
+		} else if err != nil && strings.Contains(err.Error(), "incomplete command") {
+			// FindCommand 返回 incomplete command，说明输入的命令不完整
+			// 按设备规范仅提示 % Incomplete command，使用 ? 查看候选
+			s.writerWrite(fmt.Sprintf("%% Incomplete command. Use '?' to view options.\r\n"))
+			return nil
 		}
 	}
 
@@ -624,10 +696,21 @@ func (s *Session) writerWrite(data string) error {
 	}
 	if _, err := s.writer.WriteString(data); err != nil {
 		s.writeErr = err
+		if debuglog.Enabled() {
+			debuglog.Debug("session", "write_error",
+				"remote", s.remoteStr(),
+				"err", err,
+				"data_len", len(data))
+		}
 		return err
 	}
 	if err := s.writer.Flush(); err != nil {
 		s.writeErr = err
+		if debuglog.Enabled() {
+			debuglog.Debug("session", "flush_error",
+				"remote", s.remoteStr(),
+				"err", err)
+		}
 		return err
 	}
 	return nil
@@ -640,6 +723,11 @@ func (s *Session) flushWriter() error {
 	}
 	if err := s.writer.Flush(); err != nil {
 		s.writeErr = err
+		if debuglog.Enabled() {
+			debuglog.Debug("session", "flush_error",
+				"remote", s.remoteStr(),
+				"err", err)
+		}
 		return err
 	}
 	return nil
@@ -680,6 +768,24 @@ func (s *Session) sendWelcomeMessage() error {
 	return s.writerWrite(s.config.WelcomeMsg)
 }
 
+// remoteStr 返回对端地址字符串，连接为 nil 或地址不可用时返回占位符。
+func (s *Session) remoteStr() string {
+	if s.conn != nil {
+		if addr := s.conn.RemoteAddr(); addr != nil {
+			return addr.String()
+		}
+	}
+	return "unknown"
+}
+
+// minInt 返回两个 int 中的较小值。
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // enableTelnetCharacterMode 启用telnet字符模式
 func (s *Session) enableTelnetCharacterMode() {
 	// Telnet选项协商命令
@@ -691,6 +797,11 @@ func (s *Session) enableTelnetCharacterMode() {
 		0xFF, 0xFB, 0x01, // IAC WILL ECHO
 		0xFF, 0xFD, 0x03, // IAC DO SUPPRESS_GO_AHEAD
 		0xFF, 0xFB, 0x03, // IAC WILL SUPPRESS_GO_AHEAD
+	}
+
+	if debuglog.Enabled() {
+		debuglog.Debug("session", "telnet_negotiation_sent",
+			"data_hex", hex.EncodeToString(telnetCommands))
 	}
 
 	s.writer.Write(telnetCommands)
@@ -744,31 +855,24 @@ func (s *Session) handleTabCompletion(buffer *strings.Builder) bool {
 	return true
 }
 
-// showCommandHelp 显示命令帮助（处理?键）
+// showCommandHelp 显示命令帮助（处理?键），遵循网络设备分级语义：
+//   - 空输入 ?：显示当前视图所有一级命令
+//   - 已输入关键字 ?：显示该关键字的下一级候选（子命令或参数）
+//   - 命令已完整且无更多参数：提示 <cr> 表示可直接回车执行
 func (s *Session) showCommandHelp(currentInput string) {
-	// 分析输入，按空格拆分
 	inputParts := strings.Fields(currentInput)
-
-	// 使用命令树进行智能提示
-	if len(inputParts) == 0 {
-		// 空输入，显示所有一级命令
-		completions := s.completer.GetCommandTreeSuggestions("")
-		if len(completions) > 0 {
-			s.showCompletions(completions)
-			s.redrawLine(currentInput)
-		}
+	suggestions := s.completer.GetCommandTreeSuggestions(currentInput)
+	if len(suggestions) > 0 {
+		s.showCompletions(suggestions)
+	} else if len(inputParts) > 0 {
+		// 输入已是完整命令且无更多可输入项，提示回车执行
+		s.writerWrite("\r\n")
+		s.writerWrite("<cr>\r\n")
 	} else {
-		// 获取下一级补全选项
-		nextLevelCompletions := s.completer.GetCommandTreeSuggestions(currentInput)
-		if len(nextLevelCompletions) > 0 {
-			s.showCompletions(nextLevelCompletions)
-			s.redrawLine(currentInput)
-		} else {
-			// 没有可用命令，显示提示信息
-			s.writerWrite("\r\nNo commands available\r\n")
-			s.redrawLine(currentInput)
-		}
+		s.writerWrite("\r\nNo commands available\r\n")
 	}
+	// 重新绘制当前输入行，使光标回到行尾
+	s.redrawLine(currentInput)
 }
 
 // Close 关闭会话

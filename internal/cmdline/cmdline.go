@@ -74,8 +74,8 @@ func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandl
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// 向后兼容：添加到平面命令存储
-	c.rootMode.AddCommand(name, description, handler)
+	// 向后兼容：添加到平面命令存储（包含多行详细描述）
+	c.rootMode.AddCommand(name, description, handler, detailedDescription...)
 
 	// 新功能：添加到命令树
 	err := c.commandTree.AddCommand(name, description, handler, detailedDescription...)

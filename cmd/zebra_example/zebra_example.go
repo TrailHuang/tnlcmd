@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -15,6 +16,13 @@ import (
 func main() {
 	// 创建命令行接口配置
 	config := tnlcmd.DefaultConfig()
+
+	// 支持通过环境变量 TNLCMD_PORT 覆盖端口，便于多实例并行测试
+	if p := os.Getenv("TNLCMD_PORT"); p != "" {
+		if port, err := strconv.Atoi(p); err == nil {
+			config.Port = port
+		}
+	}
 
 	// 创建命令行接口
 	cmdline := tnlcmd.NewCmdLine(config)
@@ -28,7 +36,7 @@ func main() {
 		detailedDesc string
 		handler      func([]string) string
 	}{
-		{"show running-config", "Show running system information", "show configuration\ndisplay running config", showHandler},
+		{name: "show running-config", desc: "Show running system information", detailedDesc: "show configuration\ndisplay running config", handler: showHandler},
 		{"show config", "Show running system information", "show configuration\ndisplay system config", showHandler},
 		{"ping IP", "Send echo messages", "send echo\ntest connectivity", pingHandler},
 		{"clear test1", "Reset functions", "clear test\nreset test1", clearHandler},
