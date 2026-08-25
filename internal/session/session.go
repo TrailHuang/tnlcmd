@@ -759,31 +759,18 @@ func (s *Session) handleTabCompletion(buffer *strings.Builder) bool {
 	return true
 }
 
-// showCommandHelp 显示命令帮助（处理?键）
+// showCommandHelp 显示命令帮助（处理?键）。
+// 无论当前输入是什么，统一显示当前视图的所有一级命令（含视图切换与内置命令），
+// 逐级子命令的查看由 Tab 补全承担，保证 ? 响应稳定、输出可预期。
 func (s *Session) showCommandHelp(currentInput string) {
-	// 分析输入，按空格拆分
-	inputParts := strings.Fields(currentInput)
-
-	// 使用命令树进行智能提示
-	if len(inputParts) == 0 {
-		// 空输入，显示所有一级命令
-		completions := s.completer.GetCommandTreeSuggestions("")
-		if len(completions) > 0 {
-			s.showCompletions(completions)
-			s.redrawLine(currentInput)
-		}
+	completions := s.completer.GetCommandTreeSuggestions("")
+	if len(completions) > 0 {
+		s.showCompletions(completions)
 	} else {
-		// 获取下一级补全选项
-		nextLevelCompletions := s.completer.GetCommandTreeSuggestions(currentInput)
-		if len(nextLevelCompletions) > 0 {
-			s.showCompletions(nextLevelCompletions)
-			s.redrawLine(currentInput)
-		} else {
-			// 没有可用命令，显示提示信息
-			s.writerWrite("\r\nNo commands available\r\n")
-			s.redrawLine(currentInput)
-		}
+		s.writerWrite("\r\nNo commands available\r\n")
 	}
+	// 重新绘制当前输入行，使光标回到行尾
+	s.redrawLine(currentInput)
 }
 
 // Close 关闭会话
