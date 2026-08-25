@@ -82,7 +82,7 @@ func NewSessionWithContext(conn net.Conn, config *types.Config, context *mode.Co
 	}
 
 	s.history = history.NewCommandHistory(config.MaxHistory)
-	s.completer = completer.NewCommandCompleterWithTree(context.CommandTree)
+	s.completer = completer.NewCommandCompleterWithContext(context)
 
 	// 更新命令列表
 	s.updateCommands()
@@ -200,6 +200,8 @@ const (
 	stSBIAC                        // 子协商中收到 IAC，等待 SE 或继续
 	stESC                          // 收到 ESC(0x1B)，等待 '['
 	stESCBracket                   // 收到 ESC [，等待方向键字母
+	stUTF8Q1                       // 收到 0xEF（UTF-8 多字节首字节，可能为全角问号），等待 0xBC
+	stUTF8Q2                       // 收到 0xEF 0xBC，等待 0x9F 完成全角问号
 )
 
 // isIAC2ByteCmd 判断 IAC 命令字节是否为 2 字节序列（无选项字节）。
@@ -346,6 +348,22 @@ func (s *Session) readLine() (string, error) {
 					// 其他 ESC [ X 序列，忽略
 					continue
 				}
+			case stUTF8Q1:
+				// 0xEF 后应为 0xBC 才可能是全角问号；否则恢复正常处理
+				if b == 0xBC {
+					ps = stUTF8Q2
+				} else {
+					ps = stNormal
+				}
+				continue
+			case stUTF8Q2:
+				// 0xEF 0xBC 0x9F = 全角问号 '？'（U+FF1F）→ 触发帮助
+				ps = stNormal
+				if b == 0x9F {
+					currentInput := buffer.String()
+					s.showCommandHelp(currentInput)
+				}
+				continue
 			}
 
 			// stNormal：检测多字节序列开头
@@ -355,6 +373,10 @@ func (s *Session) readLine() (string, error) {
 			}
 			if b == 0x1B { // ESC
 				ps = stESC
+				continue
+			}
+			if b == 0xEF { // UTF-8 多字节序列（如全角问号 '？' = EF BC 9F）
+				ps = stUTF8Q1
 				continue
 			}
 

@@ -381,6 +381,45 @@ func TestSession_QuestionMarkAfterIAC(t *testing.T) {
 	}
 }
 
+// TestSession_FullWidthQuestionMark 验证中文输入法下输入全角问号 '？'
+// （UTF-8 编码 EF BC 9F）同样能触发帮助。这是用户报告的场景：Terminal
+// 输入全角 '？' 后无任何反应。
+func TestSession_FullWidthQuestionMark(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	rootMode.AddCommand("echo", "Echo arguments", func(args []string) string { return "" })
+
+	pt := newPipeTest(t, 0, rootMode)
+	defer pt.close()
+
+	// 发送全角问号 '？' = UTF-8 EF BC 9F，应触发帮助显示命令列表
+	if err := pt.write(string([]byte{0xEF, 0xBC, 0x9F})); err != nil {
+		t.Fatalf("write full-width question mark failed: %v", err)
+	}
+	if got, err := pt.readUntil("Echo arguments", 3*time.Second); err != nil {
+		t.Fatalf("full-width '?' did not trigger help: %v (buf=%q)", err, got)
+	}
+}
+
+// TestSession_FullWidthQuestionMark_SplitAcrossReads 验证全角问号跨批次
+// 发送（EF / BC / 9F 分三次）时仍能正确识别并触发帮助。
+func TestSession_FullWidthQuestionMark_SplitAcrossReads(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	rootMode.AddCommand("echo", "Echo arguments", func(args []string) string { return "" })
+
+	pt := newPipeTest(t, 0, rootMode)
+	defer pt.close()
+
+	for _, b := range []byte{0xEF, 0xBC, 0x9F} {
+		if err := pt.write(string([]byte{b})); err != nil {
+			t.Fatalf("write byte %02x failed: %v", b, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got, err := pt.readUntil("Echo arguments", 3*time.Second); err != nil {
+		t.Fatalf("split full-width '?' did not trigger help: %v (buf=%q)", err, got)
+	}
+}
+
 // TestSession_TwoByteIAC_DoesNotSwallowQuestionMark 验证 2 字节 IAC 命令
 // （如 IAC NOP = FF F1）不会吞掉紧随其后的 ? 字符。
 //

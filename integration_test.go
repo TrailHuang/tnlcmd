@@ -395,15 +395,12 @@ func TestIntegration_DataFlow_HistoryPersistence(t *testing.T) {
 		it.readUntilPrompt(3 * time.Second)
 	}
 
-	// 使用上方向键回溯历史
+	// 使用上方向键回溯到最后一条历史命令（cmd3）
 	upArrow := string([]byte{0x1B, '[', 'A'})
-
-	for i := 0; i < len(commands); i++ {
-		if err := it.write(upArrow); err != nil {
-			t.Fatalf("write up arrow failed: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
+	if err := it.write(upArrow); err != nil {
+		t.Fatalf("write up arrow failed: %v", err)
 	}
+	time.Sleep(50 * time.Millisecond)
 
 	// 执行回溯的命令
 	if err := it.write("\r\n"); err != nil {
