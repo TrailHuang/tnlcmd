@@ -301,7 +301,13 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 		}
 		// 最后一个关键字精确命中命令/模式节点 → 下钻显示其下一级
 		if child, ok := node.Children[lastPart]; ok {
-			return c.describeChildren(child)
+			return c.describeChildrenWithCR(child)
+		}
+		// 最后一个关键字是已输入的参数值 → 导航到该参数节点，显示其下一级候选
+		for _, child := range node.Children {
+			if child.Type != types.NodeTypeCommand && commandtree.IsParameterMatch(child, lastPart) {
+				return c.describeChildrenWithCR(child)
+			}
 		}
 	}
 
@@ -309,7 +315,11 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 	var suggestions []string
 	seen := make(map[string]bool)
 	children := c.resolveChildren(node)
+	hasOptional := false
 	for name, child := range children {
+		if child.Type == types.NodeTypeOptional {
+			hasOptional = true
+		}
 		if strings.HasPrefix(name, lastPart) {
 			suggestions = append(suggestions, fmt.Sprintf("%-32s %s", name, child.Description))
 			seen[name] = true
@@ -328,7 +338,23 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 			}
 		}
 	}
+
+	// 当前层级存在可选参数时，命令已可回车执行，追加 <cr> 提示
+	if hasOptional {
+		suggestions = append(suggestions, "<cr>")
+	}
 	return suggestions
+}
+
+// describeChildrenWithCR 生成节点下一级候选并追加 <cr> 提示（节点存在可选参数子节点时）。
+func (c *CommandCompleter) describeChildrenWithCR(node *commandtree.CommandNode) []string {
+	out := c.describeChildren(node)
+	for _, child := range c.resolveChildren(node) {
+		if child.Type == types.NodeTypeOptional {
+			return append(out, "<cr>")
+		}
+	}
+	return out
 }
 
 // findLongestCommonPrefix 找到字符串切片中最长的公共前缀

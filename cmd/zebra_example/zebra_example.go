@@ -76,6 +76,7 @@ func main() {
 		{"configure", "set name2 STRING", "Debugging functions", "", setValueHandler},
 		{"configure", "set filter-switch3 (on|off)", "Debugging functions", "", setValueHandler},
 		{"configure", "set tes3t [STRRING]", "Debugging functions", "", setValueHandler},
+		{"configure", "set policy TEST STRING", "Debugging functions", "", setValueHandler},
 	}
 
 	for _, cmd := range configCommands {
