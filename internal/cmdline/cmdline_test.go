@@ -1,6 +1,9 @@
 package cmdline
 
 import (
+	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -193,5 +196,84 @@ func TestSetConfig_AuditLogKey(t *testing.T) {
 	// 非布尔值必须被拒绝
 	if err := c.SetConfig("auditlog", "yes"); err == nil {
 		t.Error("SetConfig(auditlog, yes) should fail")
+	}
+}
+
+// TestSetConfig_AuditLogFileKey 验证 auditlogfile 路径的设置。
+func TestSetConfig_AuditLogFileKey(t *testing.T) {
+	c := NewCmdLine(nil)
+
+	if err := c.SetConfig("auditlogfile", "/var/log/tnlcmd/audit.log"); err != nil {
+		t.Fatalf("SetConfig(auditlogfile) failed: %v", err)
+	}
+	if c.config.AuditLogFile != "/var/log/tnlcmd/audit.log" {
+		t.Errorf("AuditLogFile = %q, want /var/log/tnlcmd/audit.log", c.config.AuditLogFile)
+	}
+}
+
+// TestAuditLogFileInitializedOnStart 验证 Start 后审计日志写入配置的文件而非 stderr，
+// Stop 后 slog 默认 logger 还原（工单：审计日志落盘）。
+func TestAuditLogFileInitializedOnStart(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+
+	c := NewCmdLine(nil)
+	c.config.Port = 0
+	c.config.AuditLog = true
+	c.config.AuditLogFile = logPath
+
+	prev := slog.Default()
+	defer slog.SetDefault(prev)
+
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	// Start 后 slog 默认 logger 已切换为文件写入器：写入一条日志验证落盘
+	if slog.Default() == prev {
+		t.Fatal("slog default logger was not switched to audit file handler after Start")
+	}
+	slog.Info("audit", "event", "test_event", "command", "show version")
+	_ = c.Stop()
+
+	// Stop 后 logger 还原
+	if slog.Default() != prev {
+		t.Error("slog default logger was not restored after Stop")
+	}
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("audit log file %s not created: %v", logPath, err)
+	}
+	for _, key := range []string{"audit", "event=test_event", `command="show version"`} {
+		if !strings.Contains(string(got), key) {
+			t.Errorf("audit log file missing %q, got: %s", key, got)
+		}
+	}
+}
+
+// TestAuditLogFileNotInitializedWhenDisabled 验证 AuditLog 关闭时不创建文件、不切换 logger。
+func TestAuditLogFileNotInitializedWhenDisabled(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+
+	c := NewCmdLine(nil)
+	c.config.Port = 0
+	c.config.AuditLog = false
+	c.config.AuditLogFile = logPath
+
+	prev := slog.Default()
+	defer slog.SetDefault(prev)
+
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	_ = c.Stop()
+
+	if slog.Default() != prev {
+		t.Error("slog default logger must not change when AuditLog is disabled")
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Errorf("audit log file must not be created when AuditLog is disabled (err=%v)", err)
 	}
 }

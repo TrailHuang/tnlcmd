@@ -3,10 +3,13 @@ package cmdline
 import (
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/TrailHuang/tnlcmd/internal/auditlog"
 	"github.com/TrailHuang/tnlcmd/internal/commandtree"
 	"github.com/TrailHuang/tnlcmd/internal/mode"
 	"github.com/TrailHuang/tnlcmd/internal/server"
@@ -32,6 +35,11 @@ type CmdLine struct {
 	isRunning   bool
 	rootMode    *mode.CommandMode
 	context     *mode.CommandContext
+
+	// auditWriter 审计日志文件写入器（AuditLogFile 非空且 Start 成功时非 nil），
+	// prevLogger 记录 Start 前的 slog 默认 logger，Stop 时还原并关闭文件。
+	auditWriter *auditlog.Writer
+	prevLogger  *slog.Logger
 }
 
 // NewCmdLine 创建新的命令行接口
@@ -225,6 +233,9 @@ func (c *CmdLine) SetConfig(key, value string) error {
 			return fmt.Errorf("invalid auditlog value %q: must be a boolean (true/false)", value)
 		}
 		c.config.AuditLog = v
+	case "auditlogfile":
+		// 任意非空路径；仅在 Start 之前设置有效（Start 时初始化文件写入器）
+		c.config.AuditLogFile = value
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}
@@ -247,6 +258,12 @@ func (c *CmdLine) Start() error {
 	// 注册内置命令（在锁外执行，避免死锁）
 	c.registerBuiltinCommands()
 
+	// 审计日志文件初始化：AuditLog 开启且 AuditLogFile 非空时，
+	// 将 slog 默认 logger 切换为写入按日期滚动的文件（失败则保持 stderr 并告警）
+	if err := c.setupAuditLogFile(); err != nil {
+		slog.Warn("failed to initialize audit log file, falling back to stderr", "error", err)
+	}
+
 	// 打印命令树结构（debug级别）
 	if c.commandTree != nil {
 		slog.Debug("command tree", "structure", "\n"+c.commandTree.PrintTree())
@@ -268,6 +285,61 @@ func (c *CmdLine) Start() error {
 	return nil
 }
 
+// setupAuditLogFile 在 Start 时初始化审计日志文件写入器：
+// 创建目录、打开当天文件、启动后台清理 goroutine，并将 slog 默认 logger
+// 切换为文件 TextHandler。AuditLog 关闭或 AuditLogFile 为空时不做任何事。
+func (c *CmdLine) setupAuditLogFile() error {
+	if !c.config.AuditLog || c.config.AuditLogFile == "" {
+		return nil
+	}
+
+	if dir := filepath.Dir(c.config.AuditLogFile); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create audit log dir %s: %w", dir, err)
+		}
+	}
+
+	w, err := auditlog.NewWriter(c.config.AuditLogFile)
+	if err != nil {
+		return err
+	}
+	if w == nil {
+		return nil
+	}
+
+	c.auditWriter = w
+	c.prevLogger = slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			// 时间戳已在 slog TextHandler 默认字段中；保持原样输出
+			return a
+		},
+	})))
+	slog.Info("audit log file enabled", "file", c.config.AuditLogFile)
+	return nil
+}
+
+// teardownAuditLogFile 在 Stop 时还原 slog 默认 logger 并关闭审计文件，
+// 等待后台清理 goroutine 退出。未启用文件审计时为空操作。
+func (c *CmdLine) teardownAuditLogFile() {
+	c.mu.Lock()
+	w := c.auditWriter
+	prev := c.prevLogger
+	c.auditWriter = nil
+	c.prevLogger = nil
+	c.mu.Unlock()
+
+	if w == nil {
+		return
+	}
+	if prev != nil {
+		slog.SetDefault(prev)
+	}
+	_ = w.Close()
+	w.Wait() // 等待清理 goroutine 退出后再关闭文件，避免竞争
+}
+
 // Stop 停止命令行服务
 func (c *CmdLine) Stop() error {
 	c.mu.Lock()
@@ -282,6 +354,9 @@ func (c *CmdLine) Stop() error {
 	if c.server != nil {
 		c.server.Stop()
 	}
+
+	// 会话全部退出后再关闭审计文件，确保最后的审计记录落盘
+	c.teardownAuditLogFile()
 	return nil
 }
 

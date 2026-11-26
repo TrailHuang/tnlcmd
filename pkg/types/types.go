@@ -86,5 +86,14 @@ type Config struct {
 	// AuditLog 命令审计日志开关；false（默认）表示关闭，行为与未开启时一致。
 	// 开启后每条命令执行完成时经 slog（Info 级）输出结构化审计记录：
 	// 远端地址、命令原文、耗时、成败；密码认证失败事件同样纳入审计。
+	// 审计输出目标由 AuditLogFile 决定：为空时写 stderr，非空时写按日期滚动的文件。
 	AuditLog bool
+
+	// AuditLogFile 审计日志文件路径；空（默认）表示审计输出到 stderr。
+	// 非空时（需同时 AuditLog=true）审计日志写入该文件：
+	// 当天日志使用配置路径原样（如 /var/log/tnlcmd/audit.log），
+	// 历史日志自动重命名为 <stem>_YYYYMMDD.log（如 audit_20261125.log），
+	// 超过 30 天的历史日志由后台 goroutine 自动清理。
+	// 该字段需在 Start 之前设置；Start 时初始化文件与清理任务，Stop 时关闭。
+	AuditLogFile string
 }

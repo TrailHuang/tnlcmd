@@ -31,6 +31,12 @@ func main() {
 	// 命令审计日志示例（默认 false = 关闭；也可经 SetConfig("auditlog", "true") 设置）
 	config.AuditLog = true
 
+	// 审计日志落盘示例（默认空 = 输出到 stderr；也可经 SetConfig("auditlogfile", "...") 设置）：
+	// 设置后审计日志写入该文件，当天使用原路径，历史日志自动重命名为 <name>_YYYYMMDD.log
+	//（如 audit_20261125.log），超过 30 天的历史日志自动清理。
+	// 需在 Start 之前设置。
+	config.AuditLogFile = "/var/log/tnlcmd/audit.log"
+
 	// 支持通过环境变量 TNLCMD_PORT 覆盖端口，便于多实例并行测试
 	if p := os.Getenv("TNLCMD_PORT"); p != "" {
 		if port, err := strconv.Atoi(p); err == nil {
