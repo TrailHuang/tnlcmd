@@ -669,3 +669,82 @@ func TestSession_UpdatePromptConcurrent(t *testing.T) {
 		t.Errorf("prompt not updated by UpdatePrompt: %q", final)
 	}
 }
+
+// scriptedConn 是一个同步的内存 net.Conn：按预置脚本返回读取字节、丢弃写入。
+// 用于在单 goroutine 内驱动 readLine，避免 net.Pipe 的并发噪声影响分配测量。
+type scriptedConn struct {
+	data []byte
+	pos  int
+}
+
+func (c *scriptedConn) Read(p []byte) (int, error) {
+	if c.pos >= len(c.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, c.data[c.pos:])
+	c.pos += n
+	return n, nil
+}
+
+func (c *scriptedConn) Write(p []byte) (int, error)      { return len(p), nil }
+func (c *scriptedConn) Close() error                     { return nil }
+func (c *scriptedConn) LocalAddr() net.Addr              { return scriptedAddr{} }
+func (c *scriptedConn) RemoteAddr() net.Addr             { return scriptedAddr{} }
+func (c *scriptedConn) SetDeadline(time.Time) error      { return nil }
+func (c *scriptedConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *scriptedConn) SetWriteDeadline(time.Time) error { return nil }
+
+type scriptedAddr struct{}
+
+func (scriptedAddr) Network() string { return "scripted" }
+func (scriptedAddr) String() string  { return "scripted" }
+
+// newScriptedSession 构造一个由 scriptedConn 驱动的会话，供分配测量使用。
+func newScriptedSession(input string) (*Session, *scriptedConn) {
+	rootMode := mode.NewCommandMode("root", "P>", "test")
+	config := &types.Config{
+		Prompt:     "P>",
+		MaxHistory: 10,
+		RootMode:   rootMode,
+	}
+	conn := &scriptedConn{data: []byte(input)}
+	sess := NewSessionWithContext(conn, config, &mode.CommandContext{CurrentMode: rootMode})
+	return sess, conn
+}
+
+// TestSession_ReadBufferReused 验证 readLine 使用会话级读缓冲并在多次调用间复用同一底层数组，
+// 不再每轮 make([]byte, 1024)（工单 02 的核心约束）。
+// scriptedConn 为同步实现，readLine 与断言在同一 goroutine 内顺序执行，无数据竞争。
+func TestSession_ReadBufferReused(t *testing.T) {
+	sess, conn := newScriptedSession("cmd\r")
+
+	if len(sess.readBuf) != readBufSize {
+		t.Fatalf("readBuf len = %d, want %d", len(sess.readBuf), readBufSize)
+	}
+	first := &sess.readBuf[0]
+
+	for i := 0; i < 3; i++ {
+		conn.pos = 0
+		if line, err := sess.readLine(); err != nil || line != "cmd" {
+			t.Fatalf("readLine #%d = (%q, %v), want (%q, nil)", i, line, err, "cmd")
+		}
+		if &sess.readBuf[0] != first {
+			t.Fatalf("readBuf reallocated on iteration #%d: buffer must be reused across reads", i)
+		}
+	}
+}
+
+// BenchmarkReadLine 测量单行输入从读取到返回的分配情况。
+// 通过 -benchmem 观察 allocs/op 与 B/op：读缓冲复用后，每轮读取不再额外分配 1KB。
+func BenchmarkReadLine(b *testing.B) {
+	sess, conn := newScriptedSession("show version\r")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		conn.pos = 0
+		if _, err := sess.readLine(); err != nil {
+			b.Fatalf("readLine failed: %v", err)
+		}
+	}
+}

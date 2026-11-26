@@ -295,7 +295,7 @@ telnet localhost 2323
 | # | 问题 | 位置 |
 |---|------|------|
 | m1 | 死代码/无调用方 API：`Config.SetLogger/Logger`、`Session.commands`（仅赋值无读取）、`Session.IsStale`、`cmdline.commands` 平面存储字段、`Complete/GetCompletions/GetCurrentViewCommands`、兼容构造器 `NewTelnetServer/NewSession/NewCommandCompleter/NewCommandCompleterWithTree`（生产路径均走 WithContext 变体） | 多处 |
-| m2 | `readLine` 热路径每轮 `make([]byte, 1024)`，可复用缓冲或 `sync.Pool` 降低 GC 压力 | `session.go:246` |
+| m2 | ✅ **`readLine` 热路径每轮分配**（已修复）：读缓冲提升为会话级 `Session.readBuf`，会话创建时分配一次并全程复用 | `session.go` | 已改为复用缓冲，`BenchmarkReadLine` 24 B/op、2 allocs/op |
 | m3 | `enableTelnetCharacterMode` 直接 `writer.Write+Flush`，绕过 `writeErr` 错误记录 | `session.go:812-831` |
 | m4 | `NodeTypeExit` 已定义但无实现引用 | `types.go:35` |
 | m5 | `minInt` 辅助函数可用 Go 1.21+ 内置 `min` 替代 | `session.go:803-809` |
@@ -330,7 +330,7 @@ telnet localhost 2323
 10. **行编辑增强**（m8）：左右方向键、Ctrl+A/E、命令别名 — 工单 07（依赖 01）
 11. **历史环形缓冲**（M7）— ✅ 已完成（2026-11-26，工单 01）：`internal/history` 改为固定容量环形数组（`buf`/`start`/`size`），容量满时覆盖最旧记录并前移起点，`Add` 为 O(1)；`Get`/`GetAll`/`Previous`/`Next` 公共 API 语义保持不变；新增回绕/去重/零容量用例与 `BenchmarkAddOverflow`（满容量写入 ~23 ns/op）；会话层上/下键历史浏览经集成测试验证与改动前一致
 12. **收敛模式切换与补全入口**（M4/M5）— 工单 03/04
-13. **热路径内存优化**（m2）：复用读缓冲 — 工单 02
+13. **热路径内存优化**（m2）：复用读缓冲 — ✅ 已完成（2026-11-26，工单 02）：`readLine` 读缓冲提升为会话级字段 `Session.readBuf`（`readBufSize = 1024`），会话创建时分配一次、全程复用；`BenchmarkReadLine` 显示每行 24 B/op、2 allocs/op（不再每轮读取分配 1KB）；IAC/ESC/UTF-8 跨批次状态机用例全部通过
 
 ### P3 — 长期演进
 

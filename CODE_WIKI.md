@@ -177,6 +177,7 @@ tnlcmd/
 
 1. **Telnet 协商**：`enableTelnetCharacterMode` 发送 `IAC WILL ECHO`、`IAC DO/WILL SUPPRESS_GO_AHEAD`。
 2. **逐字节行编辑** `readLine()`：解析每个字节
+   - 批量读取复用会话级读缓冲 `Session.readBuf`（`readBufSize = 1024`），不再每轮 `make` 分配；状态机跨批次保持
    - `0xFF` IAC → 跳过 3 字节协商序列
    - `0x03`/`0x04` Ctrl+C/D → 返回 `io.EOF`
    - `0x7F`/`0x08` Backspace → 删字符并 `\r\033[K` 重绘

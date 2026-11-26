@@ -22,6 +22,10 @@ import (
 	"github.com/TrailHuang/tnlcmd/pkg/types"
 )
 
+// readBufSize 为 readLine 单次读取的批大小。
+// 该缓冲在会话生命周期内复用，避免每轮读取都分配新切片。
+const readBufSize = 1024
+
 // Session 会话结构
 type Session struct {
 	conn       net.Conn
@@ -35,6 +39,10 @@ type Session struct {
 	completer  *completer.CommandCompleter
 	context    *mode.CommandContext
 	prompt     string
+
+	// readBuf 为 readLine 的读取缓冲，会话创建时分配一次并在整个会话期间复用。
+	// 仅由 Handle→readLine 所在的单一 goroutine 访问，无需额外加锁。
+	readBuf []byte
 
 	// writeErr 记录最近一次写入错误。一旦置位，后续 writerWrite/flushWriter 直接返回该错误，
 	// 主循环据此及时退出，避免向已断开的连接继续写入。
@@ -51,6 +59,7 @@ func NewSessionWithContext(conn net.Conn, config *types.Config, context *mode.Co
 		context:    context,
 		lastActive: time.Now(),
 		prompt:     config.Prompt,
+		readBuf:    make([]byte, readBufSize),
 	}
 
 	s.history = history.NewCommandHistory(config.MaxHistory)
@@ -218,9 +227,8 @@ func (s *Session) readLine() (string, error) {
 			return "", s.writeErr
 		}
 
-		// 使用缓冲区读取，更好地处理telnet协议
-		data := make([]byte, 1024)
-		n, err := s.reader.Read(data)
+		// 复用会话级读缓冲读取，避免每轮分配；data 仅在本次循环内有效
+		n, err := s.reader.Read(s.readBuf)
 		if err != nil {
 			if debuglog.Enabled() {
 				debuglog.Debug("session", "read_error",
@@ -235,6 +243,8 @@ func (s *Session) readLine() (string, error) {
 		if n == 0 {
 			continue
 		}
+
+		data := s.readBuf[:n]
 
 		if debuglog.Enabled() {
 			debuglog.Debug("session", "input_received",
