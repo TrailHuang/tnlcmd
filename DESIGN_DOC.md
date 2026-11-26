@@ -300,7 +300,7 @@ telnet localhost 2323
 | m4 | `NodeTypeExit` 已定义但无实现引用 | `types.go:35` |
 | m5 | `minInt` 辅助函数可用 Go 1.21+ 内置 `min` 替代 | `session.go:803-809` |
 | m6 | 测试盲区：`internal/cmdline`、`internal/debuglog`、`pkg/types` 无单元测试；`integration_test.go:737` `NewCommandMode("ROUTER>", ...)` 第一参数（Name）误传了提示符 | `cmdline/`, `debuglog/`, `types/` |
-| m7 | ✅ **安全能力缺失（部分修复）**：连接数上限与空闲回收已实现（`Config.MaxConnections` / `Config.IdleTimeout`，均默认 0=关闭）；认证、TLS 待工单 06 | `server.go` |
+| m7 | ✅ **安全能力缺失（已全部修复）**：连接数上限、密码认证、空闲回收已实现（`Config.MaxConnections` / `Config.IdleTimeout` / `Config.Password` / `Config.MaxAuthAttempts`，均默认关闭）；TLS 经用户确认剔除本批 | `server.go`, `session.go` |
 | m8 | 行编辑能力不全：左右方向键光标移动、Ctrl+A/E 未实现（历史仅上/下键） | `session.go:347-349` |
 | m9 | `append(path, currentArg)` 等切片扩容共享底层数组的写法较隐蔽，当前依赖"newPath 每次 make+copy"保证安全，属脆弱点 | `command_tree.go:417,425` |
 
@@ -326,7 +326,7 @@ telnet localhost 2323
 
 > 工单拆分见 `.scratch/p2-improvements/issues/`（本地 markdown tracker，共 7 张工单）。
 
-9. **安全增强**（m7）：最大连接数、密码认证、可选 TLS、空闲会话回收（接线 `IsStale`）— 连接数上限与空闲回收 ✅ 已完成（2026-11-26，工单 05）：`Config` 新增 `MaxConnections`（0=不限制，超限连接收 `% Too many connections` 提示后关闭，检查+注册在同一临界区保证原子性）与 `IdleTimeout`（0=禁用，服务端按阈值一半间隔扫描，`Session.IsStale` 判定后关闭连接解除 readLine 阻塞）；密码认证与 TLS 待处理（工单 06）
+9. **安全增强**（m7）：最大连接数、密码认证、可选 TLS、空闲会话回收（接线 `IsStale`）— ✅ 已全部完成（2026-11-26）：工单 05 实现连接数上限（`Config.MaxConnections`，检查+注册同临界区原子完成）与空闲回收（`Config.IdleTimeout`，`Session.IsStale` 判定后锁外关闭）；工单 06 实现可选密码认证（`Config.Password`，空=关闭）——连接先经 `Session.authenticate`（Cisco 风格提示、`readPasswordLine` 不回显、IAC/ESC 状态机跳过、错误 `Config.MaxAuthAttempts` 次（默认 3）后断开、60s 认证读超时防槽位占用），通过后进入 CLI；TLS 确认剔除本批
 10. **行编辑增强**（m8）：左右方向键、Ctrl+A/E、命令别名 — 工单 07（依赖 01）
 11. **历史环形缓冲**（M7）— ✅ 已完成（2026-11-26，工单 01）：`internal/history` 改为固定容量环形数组（`buf`/`start`/`size`），容量满时覆盖最旧记录并前移起点，`Add` 为 O(1)；`Get`/`GetAll`/`Previous`/`Next` 公共 API 语义保持不变；新增回绕/去重/零容量用例与 `BenchmarkAddOverflow`（满容量写入 ~23 ns/op）；会话层上/下键历史浏览经集成测试验证与改动前一致
 12. **收敛模式切换与补全入口**（M4/M5）— ✅ 已全部完成（2026-11-26）：M5（工单 03）新增 `CommandContext.EnterMode`（ChangeMode + `"Entering %s mode\r\n"` 消息）作为模式切换唯一实现路径，`processCommand` 的 ModeSwitch 分支、无 handler 中间节点回退分支与 `createModeChangeHandler` 均委托它；M4 残余（工单 04）—— `completer` 提取共用导航 `walkExact`（`GetNextLevelCompletions`/`GetParameterCompletions` 共享）、合并单调用方冗余层 `describeChildren` → `describeChildrenWithCR`、提取统一展示格式 `formatCandidate`，并新增 `TestProductionPathContracts` 守护三条生产入口（Tab 裸名称回填 / Tab 参数裸参数名 / ? "名称定宽+描述" 展示行）的输出契约

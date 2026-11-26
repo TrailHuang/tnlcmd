@@ -134,3 +134,40 @@ func TestSetConfig_SecurityKeys(t *testing.T) {
 		t.Error("SetConfig(idletimeout, 5) should fail (ambiguous unit)")
 	}
 }
+
+// TestSetConfig_AuthKeys 验证 SetConfig 支持 password 与 maxauthattempts 两个认证 key。
+// 回归背景：与 maxconnections 相同，新字段若漏接 SetConfig，示例程序用 "_ =" 吞掉
+// unknown key 错误后配置会静默失效。
+func TestSetConfig_AuthKeys(t *testing.T) {
+	c := NewCmdLine(nil)
+
+	if err := c.SetConfig("password", "secret"); err != nil {
+		t.Fatalf("SetConfig(password) failed: %v", err)
+	}
+	if c.config.Password != "secret" {
+		t.Errorf("Password = %q, want %q", c.config.Password, "secret")
+	}
+
+	// 置空应关闭认证
+	if err := c.SetConfig("password", ""); err != nil {
+		t.Fatalf("SetConfig(password, empty) failed: %v", err)
+	}
+	if c.config.Password != "" {
+		t.Errorf("Password = %q, want empty (auth disabled)", c.config.Password)
+	}
+
+	if err := c.SetConfig("maxauthattempts", "5"); err != nil {
+		t.Fatalf("SetConfig(maxauthattempts) failed: %v", err)
+	}
+	if c.config.MaxAuthAttempts != 5 {
+		t.Errorf("MaxAuthAttempts = %d, want 5", c.config.MaxAuthAttempts)
+	}
+
+	// 负数与非数字必须被拒绝
+	if err := c.SetConfig("maxauthattempts", "-1"); err == nil {
+		t.Error("SetConfig(maxauthattempts, -1) should fail")
+	}
+	if err := c.SetConfig("maxauthattempts", "abc"); err == nil {
+		t.Error("SetConfig(maxauthattempts, abc) should fail")
+	}
+}

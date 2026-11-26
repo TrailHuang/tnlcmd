@@ -320,6 +320,188 @@ func TestServer_MaxConnectionsConcurrentRace(t *testing.T) {
 	}
 }
 
+// readUntilMarker 读取连接输出直到出现指定标记或超时，返回累积内容。
+func readUntilMarker(t *testing.T, conn net.Conn, cr *bufio.Reader, marker string) string {
+	t.Helper()
+	var buf strings.Builder
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		conn.SetReadDeadline(deadline)
+		b, err := cr.ReadByte()
+		if err != nil {
+			t.Fatalf("did not see %q: %v (buf=%q)", marker, err, buf.String())
+		}
+		buf.WriteByte(b)
+		if strings.Contains(buf.String(), marker) {
+			return buf.String()
+		}
+	}
+}
+
+// TestServer_PasswordAuthSuccess 验证密码认证全流程（工单 06）：
+// 先错一次（收到失败提示并再次提示），再输入正确密码后正常进入 CLI 并可执行命令。
+func TestServer_PasswordAuthSuccess(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "SRV>", "test")
+	rootMode.AddCommand("ping", "Ping", func(args []string) string { return "PONG\r\n" })
+
+	config := &types.Config{
+		Prompt:          "SRV>",
+		Port:            0,
+		WelcomeMsg:      "WELCOME_MARKER\r\n",
+		Password:        "secret",
+		MaxAuthAttempts: 3,
+		RootMode:        rootMode,
+	}
+	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
+	srv := NewTelnetServerWithContext(config, ctx)
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer srv.Stop()
+
+	conn, err := net.Dial("tcp", srv.listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial failed: %v", err)
+	}
+	defer conn.Close()
+
+	// 应先收到认证提示而非欢迎消息
+	first := readUntilMarker(t, conn, bufio.NewReader(conn), "Password: ")
+	if strings.Contains(first, "WELCOME_MARKER") {
+		t.Error("welcome message must not be sent before authentication succeeds")
+	}
+
+	// 第一次输错密码：收到失败提示后重新提示
+	conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write([]byte("wrong\r\n")); err != nil {
+		t.Fatalf("write wrong password failed: %v", err)
+	}
+	second := readUntilMarker(t, conn, bufio.NewReader(conn), "Password: ")
+	if !strings.Contains(second, "% Password incorrect") {
+		t.Errorf("expected failure notice, got %q", second)
+	}
+
+	// 输入正确密码：进入 CLI，收到欢迎消息
+	if _, err := conn.Write([]byte("secret\r\n")); err != nil {
+		t.Fatalf("write correct password failed: %v", err)
+	}
+	readUntilMarker(t, conn, bufio.NewReader(conn), "WELCOME_MARKER")
+
+	// CLI 可正常执行命令
+	if _, err := conn.Write([]byte("ping\r\n")); err != nil {
+		t.Fatalf("write ping failed: %v", err)
+	}
+	readUntilMarker(t, conn, bufio.NewReader(conn), "PONG")
+}
+
+// TestServer_PasswordNotEchoed 验证认证阶段密码字符不回显（工单 06）。
+// 服务端已协商 WILL ECHO（由服务端控制回显），密码输入不得出现在输出流中。
+func TestServer_PasswordNotEchoed(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "SRV>", "test")
+	config := &types.Config{
+		Prompt:     "SRV>",
+		Port:       0,
+		WelcomeMsg: "WELCOME_MARKER\r\n",
+		Password:   "topsecret",
+		RootMode:   rootMode,
+	}
+	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
+	srv := NewTelnetServerWithContext(config, ctx)
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer srv.Stop()
+
+	conn, err := net.Dial("tcp", srv.listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial failed: %v", err)
+	}
+	defer conn.Close()
+
+	readUntilMarker(t, conn, bufio.NewReader(conn), "Password: ")
+
+	if _, err := conn.Write([]byte("topsecret\r\n")); err != nil {
+		t.Fatalf("write password failed: %v", err)
+	}
+	out := readUntilMarker(t, conn, bufio.NewReader(conn), "WELCOME_MARKER")
+	if strings.Contains(out, "topsecret") {
+		t.Errorf("password characters must not be echoed, got %q", out)
+	}
+}
+
+// TestServer_PasswordAuthMaxAttemptsExceeded 验证密码错误次数达到上限后
+// 收到断开提示且连接被服务端关闭（工单 06）。
+func TestServer_PasswordAuthMaxAttemptsExceeded(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "SRV>", "test")
+	config := &types.Config{
+		Prompt:          "SRV>",
+		Port:            0,
+		WelcomeMsg:      "WELCOME_MARKER\r\n",
+		Password:        "secret",
+		MaxAuthAttempts: 2,
+		RootMode:        rootMode,
+	}
+	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
+	srv := NewTelnetServerWithContext(config, ctx)
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer srv.Stop()
+
+	conn, err := net.Dial("tcp", srv.listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial failed: %v", err)
+	}
+	defer conn.Close()
+
+	cr := bufio.NewReader(conn)
+	for i := 0; i < 2; i++ {
+		readUntilMarker(t, conn, cr, "Password: ")
+		conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+		if _, err := conn.Write([]byte("badpass\r\n")); err != nil {
+			t.Fatalf("write bad password #%d failed: %v", i+1, err)
+		}
+	}
+
+	// 达到上限：收到断开提示
+	readUntilMarker(t, conn, cr, "Too many failed authentication attempts")
+
+	// 服务端应关闭连接（读到 EOF/错误）
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	tmp := make([]byte, 1)
+	for {
+		if _, err := conn.Read(tmp); err != nil {
+			break
+		}
+	}
+}
+
+// TestServer_NoPasswordBackwardCompat 回归用例：未配置 Password 时连接行为与现状一致
+// —— 不出现认证提示，直接收到欢迎消息并可执行命令（工单 06）。
+func TestServer_NoPasswordBackwardCompat(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "SRV>", "test")
+	rootMode.AddCommand("ping", "Ping", func(args []string) string { return "PONG\r\n" })
+
+	srv, addr := freeServer(t, "WELCOME_MARKER\r\n", rootMode)
+	defer srv.Stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial failed: %v", err)
+	}
+	defer conn.Close()
+
+	out := readUntilMarker(t, conn, bufio.NewReader(conn), "WELCOME_MARKER")
+	if strings.Contains(out, "Password:") {
+		t.Error("no auth prompt should appear when Password is not configured")
+	}
+
+	if _, err := conn.Write([]byte("ping\r\n")); err != nil {
+		t.Fatalf("write ping failed: %v", err)
+	}
+	readUntilMarker(t, conn, bufio.NewReader(conn), "PONG")
+}
+
 // TestServer_IdleTimeoutReapsSession 验证空闲超过 IdleTimeout 的会话被服务端主动回收
 // （连接被关闭），而持续活跃的会话不受影响（工单 05）。
 func TestServer_IdleTimeoutReapsSession(t *testing.T) {

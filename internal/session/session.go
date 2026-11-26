@@ -95,10 +95,31 @@ func (s *Session) updateCommands() {
 	}
 }
 
+// defaultMaxAuthAttempts MaxAuthAttempts 未配置（0/负数）时的默认密码错误次数上限
+const defaultMaxAuthAttempts = 3
+
+// authTimeout 认证阶段的读取超时，防止客户端连上后不发送密码，
+// 无限期占用连接槽位（连接数上限场景下尤为危险）。认证成功后清除。
+const authTimeout = 60 * time.Second
+
+// 认证流程提示与结果消息（Cisco 风格 % 前缀）
+const (
+	authPrompt     = "\r\nUser Access Verification\r\n\r\nPassword: "
+	authFailedMsg  = "\r\n% Password incorrect\r\n"
+	authTooManyMsg = "\r\n% Too many failed authentication attempts. Disconnecting.\r\n"
+)
+
 // Handle 处理会话
 func (s *Session) Handle(ctx context.Context) error {
 	// 启用telnet字符模式
 	s.enableTelnetCharacterMode()
+
+	// 可选密码认证：Password 为空（默认）时完全跳过，行为与未开启认证时一致
+	if s.config.Password != "" {
+		if !s.authenticate(ctx) {
+			return io.EOF
+		}
+	}
 
 	// 发送欢迎消息
 	if err := s.sendWelcomeMessage(); err != nil {
@@ -200,6 +221,156 @@ func isIAC2ByteCmd(cmd byte) bool {
 // 0xFB-0xFE: WILL/WONT/DO/DONT
 func isIAC3ByteCmd(cmd byte) bool {
 	return cmd >= 0xFB && cmd <= 0xFE
+}
+
+// authenticate 密码认证流程：提示输入（不回显）→ 校验 → 错误计数。
+// 超过错误次数上限后发送断开提示并返回 false（调用方关闭连接）。
+// 认证阶段设置读取超时，防止客户端连上后不发密码而无限占用连接槽位。
+func (s *Session) authenticate(ctx context.Context) bool {
+	maxAttempts := s.config.MaxAuthAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = defaultMaxAuthAttempts
+	}
+
+	// 认证阶段读取超时；成功/失败退出时均清除，恢复正常阻塞读
+	_ = s.conn.SetReadDeadline(time.Now().Add(authTimeout))
+	defer func() { _ = s.conn.SetReadDeadline(time.Time{}) }()
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+
+		pw, err := s.readPasswordLine(authPrompt)
+		if err != nil {
+			// 读取错误（客户端断开、超时、Ctrl+C/D）
+			if debuglog.Enabled() {
+				debuglog.Debug("session", "auth_read_error",
+					"remote", s.remoteStr(),
+					"attempt", attempt,
+					"err", err)
+			}
+			return false
+		}
+		if pw == s.config.Password {
+			return true
+		}
+
+		slog.Info("authentication failed",
+			"remote", s.remoteStr(),
+			"attempt", attempt,
+			"max_attempts", maxAttempts)
+		s.writerWrite(authFailedMsg)
+		s.flushWriter()
+	}
+
+	s.writerWrite(authTooManyMsg)
+	s.flushWriter()
+	slog.Info("connection closed: too many failed authentication attempts",
+		"remote", s.remoteStr(),
+		"attempts", maxAttempts)
+	return false
+}
+
+// readPasswordLine 读取一行不回显的密码输入（认证专用）。
+// 与 readLine 共享 Telnet IAC 跳过状态机，但不做历史/补全/帮助处理，
+// 且不回显任何输入字符（服务器已协商 WILL ECHO，由服务端控制回显）。
+func (s *Session) readPasswordLine(prompt string) (string, error) {
+	if err := s.writerWrite(prompt); err != nil {
+		return "", err
+	}
+	if err := s.flushWriter(); err != nil {
+		return "", err
+	}
+
+	var buf strings.Builder
+	ps := stNormal
+
+	for {
+		if s.writeErr != nil {
+			return "", s.writeErr
+		}
+		n, err := s.reader.Read(s.readBuf)
+		if err != nil {
+			return "", err
+		}
+		if n == 0 {
+			continue
+		}
+
+		for i := 0; i < n; i++ {
+			b := s.readBuf[i]
+
+			// 跳过 Telnet 协商与终端转义序列（与 readLine 同一套状态机）
+			switch ps {
+			case stIAC:
+				switch {
+				case isIAC3ByteCmd(b):
+					ps = stIACOpt
+				case b == 0xFA:
+					ps = stSB
+				default:
+					ps = stNormal
+				}
+				continue
+			case stIACOpt:
+				ps = stNormal
+				continue
+			case stSB:
+				if b == 0xFF {
+					ps = stSBIAC
+				}
+				continue
+			case stSBIAC:
+				if b == 0xF0 {
+					ps = stNormal
+				} else {
+					ps = stSB
+				}
+				continue
+			case stESC:
+				if b == '[' {
+					ps = stESCBracket
+				} else {
+					ps = stNormal
+				}
+				continue
+			case stESCBracket:
+				ps = stNormal
+				continue
+			}
+
+			if b == 0xFF { // IAC
+				ps = stIAC
+				continue
+			}
+			if b == 0x1B { // ESC
+				ps = stESC
+				continue
+			}
+
+			switch b {
+			case 0x03, 0x04: // Ctrl+C/D：中止认证
+				return "", io.EOF
+			case 0x7F, 0x08: // Backspace：删除最后字符（不回显）
+				if buf.Len() > 0 {
+					current := buf.String()
+					buf.Reset()
+					buf.WriteString(current[:len(current)-1])
+				}
+			case 0x0D, 0x0A: // Enter：提交密码
+				s.writerWrite("\r\n")
+				s.flushWriter()
+				return buf.String(), nil
+			default:
+				if b >= 0x20 && b <= 0x7E {
+					buf.WriteByte(b) // 不回显
+				}
+			}
+		}
+	}
 }
 
 // readLine 读取一行输入

@@ -77,11 +77,15 @@ func DefaultConfig() *Config {
 		MaxHistory: 100,
 		PageSize:   24,
 
-		// 安全能力默认关闭（0 值）：不限制连接数、不回收空闲会话。
+		// 安全能力默认关闭（0 值）：不限制连接数、不回收空闲会话、不启用密码认证。
 		// 需要时按需设置，例如：
-		//   MaxConnections: 10,
-		//   IdleTimeout:    5 * time.Minute,
-		MaxConnections: 0,
-		IdleTimeout:    0,
+		//   MaxConnections:  10,
+		//   IdleTimeout:     5 * time.Minute,
+		//   Password:        "secret",
+		//   MaxAuthAttempts: 3, // 0 使用内置默认值 3
+		MaxConnections:  0,
+		IdleTimeout:     0,
+		Password:        "",
+		MaxAuthAttempts: 0,
 	}
 }

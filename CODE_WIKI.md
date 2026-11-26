@@ -176,6 +176,7 @@ tnlcmd/
 
 `Session` 是最复杂的模块，单连接独占一个实例，负责：
 
+0. **可选密码认证** `authenticate()`：`Config.Password` 非空时在欢迎消息前执行——`readPasswordLine` 提示 `Password:` 并**不回显**读取（共享 readLine 的 IAC/ESC 状态机），错误达 `Config.MaxAuthAttempts`（默认 3）次后发送断开提示并关闭连接；认证阶段有 60s 读超时防止槽位被不发密码的客户端无限占用，成功后清除超时。
 1. **Telnet 协商**：`enableTelnetCharacterMode` 发送 `IAC WILL ECHO`、`IAC DO/WILL SUPPRESS_GO_AHEAD`。
 2. **逐字节行编辑** `readLine()`：解析每个字节
    - 批量读取复用会话级读缓冲 `Session.readBuf`（`readBufSize = 1024`），不再每轮 `make` 分配；状态机跨批次保持

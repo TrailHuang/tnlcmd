@@ -74,4 +74,13 @@ type Config struct {
 	// IdleTimeout 空闲会话回收阈值；0（默认）表示禁用回收。
 	// 会话空闲（无输入）超过该时长后由服务端主动关闭连接。
 	IdleTimeout time.Duration
+
+	// Password 可选密码认证口令；空（默认）表示关闭认证，
+	// 连接建立后直接进入 CLI，行为与未开启认证时完全一致。
+	// 开启后连接先进入密码输入流程（不回显），验证通过方可进入 CLI。
+	Password string
+
+	// MaxAuthAttempts 密码错误次数上限，超过后断开连接；
+	// 0 或负数（默认）使用内置默认值 3。
+	MaxAuthAttempts int
 }

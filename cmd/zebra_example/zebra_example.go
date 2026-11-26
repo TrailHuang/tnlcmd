@@ -24,6 +24,10 @@ func main() {
 	config.MaxConnections = 10
 	config.IdleTimeout = 5 * time.Minute
 
+	// 密码认证示例（默认空 = 关闭；取消注释即可启用）：
+	//config.Password = "secret"
+	//config.MaxAuthAttempts = 3 // 密码错误次数上限，0 使用内置默认值 3
+
 	// 支持通过环境变量 TNLCMD_PORT 覆盖端口，便于多实例并行测试
 	if p := os.Getenv("TNLCMD_PORT"); p != "" {
 		if port, err := strconv.Atoi(p); err == nil {

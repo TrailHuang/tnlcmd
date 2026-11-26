@@ -212,6 +212,15 @@ func (c *CmdLine) SetConfig(key, value string) error {
 			return fmt.Errorf("invalid idletimeout value %q: must be a non-negative duration like \"5m\" or \"30s\"", value)
 		}
 		c.config.IdleTimeout = v
+	case "password":
+		// 任意字符串；置空表示关闭认证
+		c.config.Password = value
+	case "maxauthattempts":
+		v, err := strconv.Atoi(value)
+		if err != nil || v < 0 {
+			return fmt.Errorf("invalid maxauthattempts value %q: must be a non-negative integer", value)
+		}
+		c.config.MaxAuthAttempts = v
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}
