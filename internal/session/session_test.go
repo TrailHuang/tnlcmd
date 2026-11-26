@@ -748,3 +748,303 @@ func BenchmarkReadLine(b *testing.B) {
 		}
 	}
 }
+
+// newCursorTest 构造带 say 命令（回显第一个参数）的 pipeTest，
+// 供光标编辑系列测试使用。
+func newCursorTest(t *testing.T) *pipeTest {
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	rootMode.AddCommand("say WORD", "Echo first arg", func(args []string) string {
+		return fmt.Sprintf("SAID=%s\r\n", args[0])
+	})
+	return newPipeTest(t, 0, rootMode)
+}
+
+// TestSession_CursorLeftInsert 验证 ← 移动光标后输入插入到光标处（工单 07）。
+// "say helo" + ← + "l" → "say hello"。
+// 注意：net.Pipe 同步传输，每次写入后必须排空服务端输出（回显/重绘）再写下一批。
+func TestSession_CursorLeftInsert(t *testing.T) {
+	pt := newCursorTest(t)
+	defer pt.close()
+
+	// 输入并排空回显
+	if err := pt.write("say helo"); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if _, err := pt.readUntil("say helo", 3*time.Second); err != nil {
+		t.Fatalf("did not see echo: %v", err)
+	}
+
+	// ←：光标移到 'o' 前，服务端整行重绘并以 ESC[1D 定位光标
+	if err := pt.write("\x1b[D"); err != nil {
+		t.Fatalf("write left arrow failed: %v", err)
+	}
+	if _, err := pt.readUntil("\x1b[1D", 3*time.Second); err != nil {
+		t.Fatalf("did not see redraw after left arrow: %v", err)
+	}
+
+	// 行中插入 'l' → "say hello"，光标仍偏移 1 列
+	if err := pt.write("l"); err != nil {
+		t.Fatalf("write insert failed: %v", err)
+	}
+	if _, err := pt.readUntil("\x1b[KPROMPT_END>say hello\x1b[1D", 3*time.Second); err != nil {
+		t.Fatalf("mid-line insert did not redraw 'say hello': %v", err)
+	}
+
+	if err := pt.write("\r\n"); err != nil {
+		t.Fatalf("write enter failed: %v", err)
+	}
+	if _, err := pt.readUntil("SAID=hello", 3*time.Second); err != nil {
+		t.Fatalf("left+insert did not produce 'say hello': %v", err)
+	}
+}
+
+// TestSession_CtrlAHomeInsert 验证 Ctrl+A 跳行首后输入插入到行首（工单 07）。
+// "ay hello" + Ctrl+A + "s" → "say hello"。
+func TestSession_CtrlAHomeInsert(t *testing.T) {
+	pt := newCursorTest(t)
+	defer pt.close()
+
+	if err := pt.write("ay hello"); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if _, err := pt.readUntil("ay hello", 3*time.Second); err != nil {
+		t.Fatalf("did not see echo: %v", err)
+	}
+
+	// Ctrl+A：跳行首，重绘后光标左移 8 列（回到行首）
+	if err := pt.write("\x01"); err != nil {
+		t.Fatalf("write Ctrl+A failed: %v", err)
+	}
+	if _, err := pt.readUntil("\x1b[8D", 3*time.Second); err != nil {
+		t.Fatalf("did not see redraw after Ctrl+A: %v", err)
+	}
+
+	// 行首插入 's' → "say hello"，光标在 1 → 仍需左移 8 列
+	if err := pt.write("s"); err != nil {
+		t.Fatalf("write insert failed: %v", err)
+	}
+	if _, err := pt.readUntil("\x1b[KPROMPT_END>say hello\x1b[8D", 3*time.Second); err != nil {
+		t.Fatalf("home insert did not redraw 'say hello': %v", err)
+	}
+
+	if err := pt.write("\r\n"); err != nil {
+		t.Fatalf("write enter failed: %v", err)
+	}
+	if _, err := pt.readUntil("SAID=hello", 3*time.Second); err != nil {
+		t.Fatalf("Ctrl+A+insert did not produce 'say hello': %v", err)
+	}
+}
+
+// TestSession_CtrlAHomeCtrlEEnd 验证 Ctrl+A / Ctrl+E 组合跳转后输入落在行尾（工单 07）。
+// "say hel" + Ctrl+A + Ctrl+E + "lo" → "say hello"。
+func TestSession_CtrlAHomeCtrlEEnd(t *testing.T) {
+	pt := newCursorTest(t)
+	defer pt.close()
+
+	if err := pt.write("say hel"); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if _, err := pt.readUntil("say hel", 3*time.Second); err != nil {
+		t.Fatalf("did not see echo: %v", err)
+	}
+
+	// Ctrl+A：跳行首（重绘含 ESC[7D 光标定位）
+	if err := pt.write("\x01"); err != nil {
+		t.Fatalf("write Ctrl+A failed: %v", err)
+	}
+	if _, err := pt.readUntil("\x1b[7D", 3*time.Second); err != nil {
+		t.Fatalf("did not see redraw after Ctrl+A: %v", err)
+	}
+
+	// Ctrl+E：跳行尾（光标已在行尾则重绘无光标移动序列）
+	if err := pt.write("\x05"); err != nil {
+		t.Fatalf("write Ctrl+E failed: %v", err)
+	}
+	if _, err := pt.readUntil("\x1b[KPROMPT_END>say hel", 3*time.Second); err != nil {
+		t.Fatalf("did not see redraw after Ctrl+E: %v", err)
+	}
+
+	if err := pt.write("lo\r\n"); err != nil {
+		t.Fatalf("write insert+enter failed: %v", err)
+	}
+	if _, err := pt.readUntil("SAID=hello", 3*time.Second); err != nil {
+		t.Fatalf("Ctrl+A/Ctrl+E navigation did not produce 'say hello': %v", err)
+	}
+}
+
+// TestSession_DeleteKeyAtCursor 验证 Delete 键（ESC[3~）删除光标处字符（工单 07）。
+// "say axbc" + ←×3（光标停在 'x' 上）+ Delete → "say abc"。
+func TestSession_DeleteKeyAtCursor(t *testing.T) {
+	pt := newCursorTest(t)
+	defer pt.close()
+
+	if err := pt.write("say axbc"); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if _, err := pt.readUntil("say axbc", 3*time.Second); err != nil {
+		t.Fatalf("did not see echo: %v", err)
+	}
+
+	// ←×3：光标从行尾移到 'x' 前，每次重绘的左移列数递增 1→2→3
+	for i := 1; i <= 3; i++ {
+		if err := pt.write("\x1b[D"); err != nil {
+			t.Fatalf("write left arrow #%d failed: %v", i, err)
+		}
+		if _, err := pt.readUntil(fmt.Sprintf("\x1b[%dD", i), 3*time.Second); err != nil {
+			t.Fatalf("did not see redraw #%d after left arrow: %v", i, err)
+		}
+	}
+
+	// Delete（ESC[3~）删除 'x' → "say abc"，光标偏移 2 列
+	if err := pt.write("\x1b[3~"); err != nil {
+		t.Fatalf("write delete key failed: %v", err)
+	}
+	if _, err := pt.readUntil("\x1b[KPROMPT_END>say abc\x1b[2D", 3*time.Second); err != nil {
+		t.Fatalf("Delete key did not remove char under cursor: %v", err)
+	}
+
+	if err := pt.write("\r\n"); err != nil {
+		t.Fatalf("write enter failed: %v", err)
+	}
+	if _, err := pt.readUntil("SAID=abc", 3*time.Second); err != nil {
+		t.Fatalf("Delete key edit did not produce 'say abc': %v", err)
+	}
+}
+
+// TestSession_BackspaceAtCursor 验证 Backspace 在光标位于行中时删除前一字符
+// 并保持右侧内容（工单 07：非仅行尾删除）。
+// "say aXbc" + ←×2 + Backspace → "say abc"。
+func TestSession_BackspaceAtCursor(t *testing.T) {
+	pt := newCursorTest(t)
+	defer pt.close()
+
+	if err := pt.write("say aXbc"); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if _, err := pt.readUntil("say aXbc", 3*time.Second); err != nil {
+		t.Fatalf("did not see echo: %v", err)
+	}
+
+	// ←×2：光标移到 'X' 之后
+	for i := 1; i <= 2; i++ {
+		if err := pt.write("\x1b[D"); err != nil {
+			t.Fatalf("write left arrow #%d failed: %v", i, err)
+		}
+		if _, err := pt.readUntil(fmt.Sprintf("\x1b[%dD", i), 3*time.Second); err != nil {
+			t.Fatalf("did not see redraw #%d after left arrow: %v", i, err)
+		}
+	}
+
+	// Backspace 删除 'X' → "say abc"，光标偏移 2 列
+	if err := pt.write("\x7f"); err != nil {
+		t.Fatalf("write backspace failed: %v", err)
+	}
+	if _, err := pt.readUntil("\x1b[KPROMPT_END>say abc\x1b[2D", 3*time.Second); err != nil {
+		t.Fatalf("mid-line backspace did not produce 'say abc': %v", err)
+	}
+
+	if err := pt.write("\r\n"); err != nil {
+		t.Fatalf("write enter failed: %v", err)
+	}
+	if _, err := pt.readUntil("SAID=abc", 3*time.Second); err != nil {
+		t.Fatalf("mid-line backspace edit did not produce 'say abc': %v", err)
+	}
+}
+
+// TestSession_HistoryResetsCursor 验证历史浏览后编辑光标复位到行尾（工单 07）。
+// ↑ 回显 "say second" → ← 移动光标 → ↑ 回显 "say first"（光标必须复位行尾）
+// → 输入 "X" 应追加到行尾得到 "say firstX"。
+func TestSession_HistoryResetsCursor(t *testing.T) {
+	pt := newCursorTest(t)
+	defer pt.close()
+
+	// 建立两条历史记录
+	for i, cmd := range []string{"first", "second"} {
+		if err := pt.write("say " + cmd + "\r\n"); err != nil {
+			t.Fatalf("write command #%d failed: %v", i+1, err)
+		}
+		if _, err := pt.readUntil("SAID="+cmd, 3*time.Second); err != nil {
+			t.Fatalf("did not see result #%d: %v", i+1, err)
+		}
+		if _, err := pt.readUntil("PROMPT_END>", 3*time.Second); err != nil {
+			t.Fatalf("did not see prompt #%d: %v", i+1, err)
+		}
+	}
+
+	// ↑ 回显 "say second"（光标在行尾，重绘无移动序列）
+	if err := pt.write("\x1b[A"); err != nil {
+		t.Fatalf("write up arrow failed: %v", err)
+	}
+	if _, err := pt.readUntil("PROMPT_END>say second", 3*time.Second); err != nil {
+		t.Fatalf("first up arrow should recall 'say second': %v", err)
+	}
+
+	// ←：光标移入行中（重绘含 ESC[1D）
+	if err := pt.write("\x1b[D"); err != nil {
+		t.Fatalf("write left arrow failed: %v", err)
+	}
+	if _, err := pt.readUntil("\x1b[1D", 3*time.Second); err != nil {
+		t.Fatalf("did not see redraw after left arrow: %v", err)
+	}
+
+	// ↑：回显 "say first"，光标必须复位行尾（重绘无移动序列）
+	if err := pt.write("\x1b[A"); err != nil {
+		t.Fatalf("write second up arrow failed: %v", err)
+	}
+	if _, err := pt.readUntil("PROMPT_END>say first", 3*time.Second); err != nil {
+		t.Fatalf("second up arrow should recall 'say first': %v", err)
+	}
+
+	// 输入 "X"：光标若已复位行尾则追加得 "say firstX"（普通回显），
+	// 未复位则会插到行中（如 "say fiXrst"）
+	if err := pt.write("X\r\n"); err != nil {
+		t.Fatalf("write X+enter failed: %v", err)
+	}
+	if _, err := pt.readUntil("SAID=firstX", 3*time.Second); err != nil {
+		t.Fatalf("cursor was not reset to end after history recall: %v", err)
+	}
+}
+
+// TestSession_CursorWithIACMixedInput 验证 IAC 序列混入光标编辑时状态保持正确（工单 07）。
+// "say hel" + 2 字节 IAC(NOP) + ← + "X" → "say heXl"。
+func TestSession_CursorWithIACMixedInput(t *testing.T) {
+	pt := newCursorTest(t)
+	defer pt.close()
+
+	if err := pt.write("say hel"); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if _, err := pt.readUntil("say hel", 3*time.Second); err != nil {
+		t.Fatalf("did not see echo: %v", err)
+	}
+
+	// 混入一个 2 字节 IAC（NOP），服务端静默丢弃，无输出
+	if err := pt.write(string([]byte{0xFF, 0xF1})); err != nil {
+		t.Fatalf("write IAC NOP failed: %v", err)
+	}
+
+	// ←：光标移到 'l' 前
+	if err := pt.write("\x1b[D"); err != nil {
+		t.Fatalf("write left arrow failed: %v", err)
+	}
+	if _, err := pt.readUntil("\x1b[1D", 3*time.Second); err != nil {
+		t.Fatalf("did not see redraw after left arrow: %v", err)
+	}
+
+	// 行中插入 'X' → "say heXl"，光标偏移 1 列
+	if err := pt.write("X"); err != nil {
+		t.Fatalf("write insert failed: %v", err)
+	}
+	// 标记必须包含重绘尾部（\x1b[1D），否则服务端 flush 会因客户端
+	// 未读完整块而阻塞，后续写入超时
+	if _, err := pt.readUntil("\x1b[KPROMPT_END>say heXl\x1b[1D", 3*time.Second); err != nil {
+		t.Fatalf("mid-line insert after IAC did not redraw 'say heXl': %v", err)
+	}
+
+	if err := pt.write("\r\n"); err != nil {
+		t.Fatalf("write enter failed: %v", err)
+	}
+	if _, err := pt.readUntil("SAID=heXl", 3*time.Second); err != nil {
+		t.Fatalf("IAC mixed with cursor editing broke input: %v", err)
+	}
+}

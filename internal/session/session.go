@@ -206,6 +206,7 @@ const (
 	stSBIAC                        // 子协商中收到 IAC，等待 SE 或继续
 	stESC                          // 收到 ESC(0x1B)，等待 '['
 	stESCBracket                   // 收到 ESC [，等待方向键字母
+	stESCTilde                     // 收到 ESC [ <参数>，等待终止字节 '~' 或修饰变体字母
 	stUTF8Q1                       // 收到 0xEF（UTF-8 多字节首字节，可能为全角问号），等待 0xBC
 	stUTF8Q2                       // 收到 0xEF 0xBC，等待 0x9F 完成全角问号
 )
@@ -222,6 +223,76 @@ func isIAC2ByteCmd(cmd byte) bool {
 func isIAC3ByteCmd(cmd byte) bool {
 	return cmd >= 0xFB && cmd <= 0xFE
 }
+
+// lineEditor 会话行编辑缓冲：维护输入内容与光标位置，
+// 支持 ←/→ 移动、Home/End（Ctrl+A/E）跳转、按光标位置插入/删除。
+// 仅存储可打印 ASCII 字节（0x20-0x7E），按字节编辑即可。
+type lineEditor struct {
+	buf    []byte
+	cursor int
+}
+
+func (e *lineEditor) String() string { return string(e.buf) }
+func (e *lineEditor) Len() int       { return len(e.buf) }
+
+// reset 替换全部内容，光标置于行尾
+func (e *lineEditor) reset(s string) {
+	e.buf = append(e.buf[:0], s...)
+	e.cursor = len(e.buf)
+}
+
+// insert 在光标处插入一个可打印字节
+func (e *lineEditor) insert(b byte) {
+	e.buf = append(e.buf, 0)
+	copy(e.buf[e.cursor+1:], e.buf[e.cursor:])
+	e.buf[e.cursor] = b
+	e.cursor++
+}
+
+// backspace 删除光标前一个字符，已到行首返回 false
+func (e *lineEditor) backspace() bool {
+	if e.cursor == 0 {
+		return false
+	}
+	copy(e.buf[e.cursor-1:], e.buf[e.cursor:])
+	e.buf = e.buf[:len(e.buf)-1]
+	e.cursor--
+	return true
+}
+
+// delete 删除光标处一个字符（Delete 键），光标在行尾返回 false
+func (e *lineEditor) delete() bool {
+	if e.cursor >= len(e.buf) {
+		return false
+	}
+	copy(e.buf[e.cursor:], e.buf[e.cursor+1:])
+	e.buf = e.buf[:len(e.buf)-1]
+	return true
+}
+
+// left 光标左移一格，已在行首返回 false
+func (e *lineEditor) left() bool {
+	if e.cursor == 0 {
+		return false
+	}
+	e.cursor--
+	return true
+}
+
+// right 光标右移一格，已在行尾返回 false
+func (e *lineEditor) right() bool {
+	if e.cursor >= len(e.buf) {
+		return false
+	}
+	e.cursor++
+	return true
+}
+
+// home 光标跳行首
+func (e *lineEditor) home() { e.cursor = 0 }
+
+// end 光标跳行尾
+func (e *lineEditor) end() { e.cursor = len(e.buf) }
 
 // authenticate 密码认证流程：提示输入（不回显）→ 校验 → 错误计数。
 // 超过错误次数上限后发送断开提示并返回 false（调用方关闭连接）。
@@ -373,10 +444,14 @@ func (s *Session) readPasswordLine(prompt string) (string, error) {
 	}
 }
 
-// readLine 读取一行输入
+// readLine 读取一行输入（支持光标级行编辑：←/→ 移动、Ctrl+A/E 跳行首/行尾、
+// Backspace/Delete 按光标位置删字）
 func (s *Session) readLine() (string, error) {
-	var buffer strings.Builder
+	e := &lineEditor{}
 	var historyIndex int = -1
+	// pendingEdit 记录 ESC [ 后的参数字节（'1'/'3'/'4'/'7'/'8'），
+	// 供 stESCTilde 等待终止字节时区分 Home/Delete/End（跨 read 批次保持）
+	var pendingEdit byte
 
 	if s.writeErr != nil {
 		return "", s.writeErr
@@ -422,7 +497,8 @@ func (s *Session) readLine() (string, error) {
 				"remote", s.remoteStr(),
 				"n", n,
 				"state", ps,
-				"buffer_len", buffer.Len(),
+				"buffer_len", e.Len(),
+				"cursor", e.cursor,
 				"first_byte_hex", hex.EncodeToString(data[:1]),
 				"prefix_hex", hex.EncodeToString(data[:min(n, 8)]))
 		}
@@ -474,8 +550,8 @@ func (s *Session) readLine() (string, error) {
 				switch b {
 				case 'A': // Up arrow - 浏览更早的历史命令
 					if s.history.Len() == 0 {
-						buffer.Reset()
-						s.redrawLine("")
+						e.reset("")
+						s.redrawLineCursor(e)
 					} else {
 						if historyIndex < 0 {
 							historyIndex = s.history.Len() - 1
@@ -483,28 +559,81 @@ func (s *Session) readLine() (string, error) {
 							historyIndex--
 						}
 						cmd := s.history.Get(historyIndex)
-						buffer.Reset()
-						buffer.WriteString(cmd)
-						s.redrawLine(buffer.String())
+						e.reset(cmd)
+						s.redrawLineCursor(e)
 					}
 					continue
 				case 'B': // Down arrow - 浏览更新的历史命令
 					if historyIndex >= 0 && historyIndex < s.history.Len()-1 {
 						historyIndex++
 						cmd := s.history.Get(historyIndex)
-						buffer.Reset()
-						buffer.WriteString(cmd)
-						s.redrawLine(buffer.String())
+						e.reset(cmd)
+						s.redrawLineCursor(e)
 					} else if historyIndex == s.history.Len()-1 {
 						historyIndex = -1
-						buffer.Reset()
-						s.redrawLine("")
+						e.reset("")
+						s.redrawLineCursor(e)
 					}
+					continue
+				case 'C': // Right arrow - 光标右移
+					if e.right() {
+						s.redrawLineCursor(e)
+					}
+					continue
+				case 'D': // Left arrow - 光标左移
+					if e.left() {
+						s.redrawLineCursor(e)
+					}
+					continue
+				case 'H': // Home - 跳行首
+					e.home()
+					s.redrawLineCursor(e)
+					continue
+				case 'F': // End - 跳行尾
+					e.end()
+					s.redrawLineCursor(e)
+					continue
+				case '1', '3', '4', '7', '8': // 带参 CSI 序列（1~/3~/4~/7~/8~ 及修饰变体）
+					pendingEdit = b
+					ps = stESCTilde
 					continue
 				default:
 					// 其他 ESC [ X 序列，忽略
 					continue
 				}
+			case stESCTilde:
+				// 等待带参 CSI 序列的终止字节：'~' 触发动作；
+				// 字母终止（如 ESC[1;5D 的 'D'）按对应方向键处理；
+				// 中间字节（';' 与修饰符数字）静默丢弃，继续等待
+				switch {
+				case b == '~':
+					ps = stNormal
+					switch pendingEdit {
+					case '3': // Delete - 删除光标处字符
+						if e.delete() {
+							s.redrawLineCursor(e)
+						}
+					case '1', '7': // Home - 跳行首
+						e.home()
+						s.redrawLineCursor(e)
+					case '4', '8': // End - 跳行尾
+						e.end()
+						s.redrawLineCursor(e)
+					}
+				case (b >= 'A' && b <= 'D') || b == 'H' || b == 'F':
+					ps = stNormal
+					switch b {
+					case 'D': // 如 ESC[1;5D（Ctrl+Left）
+						if e.left() {
+							s.redrawLineCursor(e)
+						}
+					case 'C': // 如 ESC[1;5C（Ctrl+Right）
+						if e.right() {
+							s.redrawLineCursor(e)
+						}
+					}
+				}
+				continue
 			case stUTF8Q1:
 				// 0xEF 后应为 0xBC 才可能是全角问号；否则恢复正常处理
 				if b == 0xBC {
@@ -517,8 +646,7 @@ func (s *Session) readLine() (string, error) {
 				// 0xEF 0xBC 0x9F = 全角问号 '？'（U+FF1F）→ 触发帮助
 				ps = stNormal
 				if b == 0x9F {
-					currentInput := buffer.String()
-					s.showCommandHelp(currentInput)
+					s.showCommandHelp(e)
 				}
 				continue
 			}
@@ -543,37 +671,45 @@ func (s *Session) readLine() (string, error) {
 				return "", io.EOF
 			case 0x04: // Ctrl+D
 				return "", io.EOF
-			case 0x7F, 0x08: // Backspace
-				if buffer.Len() > 0 {
-					current := buffer.String()
-					buffer.Reset()
-					buffer.WriteString(current[:len(current)-1])
-					s.redrawLine(buffer.String())
+			case 0x01: // Ctrl+A - 光标跳行首
+				e.home()
+				s.redrawLineCursor(e)
+			case 0x05: // Ctrl+E - 光标跳行尾
+				e.end()
+				s.redrawLineCursor(e)
+			case 0x7F, 0x08: // Backspace - 删除光标前一字符
+				if e.backspace() {
+					s.redrawLineCursor(e)
 				}
 			case 0x09: // Tab - 命令补全
-				if !s.handleTabCompletion(&buffer) {
+				if !s.handleTabCompletion(e) {
 					continue
 				}
 			case 0x3F: // ? - 显示命令提示
-				currentInput := buffer.String()
-				s.showCommandHelp(currentInput)
+				s.showCommandHelp(e)
 				continue
 
 			case 0x0D, 0x0A: // Enter
 				if debuglog.Enabled() {
 					debuglog.Debug("session", "input_line_ready",
 						"remote", s.remoteStr(),
-						"line", buffer.String(),
-						"len", buffer.Len())
+						"line", e.String(),
+						"len", e.Len())
 				}
 				s.writerWrite("\r\n")
 				s.flushWriter()
-				return buffer.String(), nil
+				return e.String(), nil
 			default:
 				if b >= 0x20 && b <= 0x7E {
-					buffer.WriteByte(b)
-					s.writerWrite(string([]byte{b}))
-					s.flushWriter()
+					e.insert(b)
+					if e.cursor == e.Len() {
+						// 光标在行尾：仅回显该字节（匹配旧行为，避免逐键整行重绘）
+						s.writerWrite(string([]byte{b}))
+						s.flushWriter()
+					} else {
+						// 插入到行中：整行重绘并定位光标
+						s.redrawLineCursor(e)
+					}
 				}
 			}
 		}
@@ -878,12 +1014,24 @@ func (s *Session) getParameterValidationError(node *commandtree.CommandNode, inp
 	}
 }
 
-// redrawLine 重绘当前行
+// redrawLine 重绘当前行（光标位于行尾）
 func (s *Session) redrawLine(line string) {
 	// 清除当前行并重新显示
 	s.writerWrite("\r\x1b[K") // 回到行首并清除整行
 	s.writerWrite(s.prompt)
 	s.writerWrite(line)
+	s.flushWriter()
+}
+
+// redrawLineCursor 重绘当前行并把终端光标定位到编辑光标位置：
+// 行首清行 → 提示符 → 整行内容 →（光标不在行尾时）发送 ESC[{n}D 左移 n 列。
+func (s *Session) redrawLineCursor(e *lineEditor) {
+	s.writerWrite("\r\x1b[K")
+	s.writerWrite(s.prompt)
+	s.writerWrite(e.String())
+	if back := e.Len() - e.cursor; back > 0 {
+		s.writerWrite(fmt.Sprintf("\x1b[%dD", back))
+	}
 	s.flushWriter()
 }
 
@@ -1003,15 +1151,15 @@ func (s *Session) enableTelnetCharacterMode() {
 }
 
 // handleTabCompletion 处理Tab键补全
-func (s *Session) handleTabCompletion(buffer *strings.Builder) bool {
-	currentInput := buffer.String()
+func (s *Session) handleTabCompletion(e *lineEditor) bool {
+	currentInput := e.String()
 	inputParts := strings.Fields(currentInput)
 
 	if len(inputParts) == 0 {
 		suggestions := s.completer.GetCommandTreeSuggestions(currentInput)
 		if len(suggestions) > 0 {
 			s.showCompletions(suggestions)
-			s.redrawLine(currentInput)
+			s.redrawLineCursor(e)
 		}
 		return false
 	}
@@ -1024,19 +1172,19 @@ func (s *Session) handleTabCompletion(buffer *strings.Builder) bool {
 		if len(paramCompletions) > 0 {
 			s.showCompletions(paramCompletions)
 			s.flushWriter()
-			s.redrawLine(buffer.String())
+			s.redrawLineCursor(e)
 		} else {
 			s.writerWrite("\x07")
 			s.flushWriter()
 		}
 	case 1:
-		buffer.Reset()
-		buffer.WriteString(nextLevelCompletions[0])
-		s.redrawLine(buffer.String())
+		// 唯一匹配：整行替换为补全结果，光标落行尾
+		e.reset(nextLevelCompletions[0])
+		s.redrawLineCursor(e)
 	default:
 		s.showCompletions(nextLevelCompletions)
 		s.flushWriter()
-		s.redrawLine(buffer.String())
+		s.redrawLineCursor(e)
 	}
 
 	return true
@@ -1046,9 +1194,11 @@ func (s *Session) handleTabCompletion(buffer *strings.Builder) bool {
 //   - 空输入 ?：显示当前视图所有一级命令
 //   - 已输入关键字 ?：显示该关键字的下一级候选（子命令或参数）
 //   - 命令已完整且无更多参数：提示 <cr> 表示可直接回车执行
-func (s *Session) showCommandHelp(currentInput string) {
-	inputParts := strings.Fields(currentInput)
-	suggestions := s.completer.GetCommandTreeSuggestions(currentInput)
+//
+// 帮助显示后按编辑光标位置重绘输入行。
+func (s *Session) showCommandHelp(e *lineEditor) {
+	inputParts := strings.Fields(e.String())
+	suggestions := s.completer.GetCommandTreeSuggestions(e.String())
 	if len(suggestions) > 0 {
 		s.showCompletions(suggestions)
 	} else if len(inputParts) > 0 {
@@ -1058,8 +1208,8 @@ func (s *Session) showCommandHelp(currentInput string) {
 	} else {
 		s.writerWrite("\r\nNo commands available\r\n")
 	}
-	// 重新绘制当前输入行，使光标回到行尾
-	s.redrawLine(currentInput)
+	// 重绘当前输入行，使光标回到编辑位置
+	s.redrawLineCursor(e)
 }
 
 // Close 关闭会话

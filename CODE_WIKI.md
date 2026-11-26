@@ -180,6 +180,7 @@ tnlcmd/
 1. **Telnet 协商**：`enableTelnetCharacterMode` 发送 `IAC WILL ECHO`、`IAC DO/WILL SUPPRESS_GO_AHEAD`。
 2. **逐字节行编辑** `readLine()`：解析每个字节
    - 批量读取复用会话级读缓冲 `Session.readBuf`（`readBufSize = 1024`），不再每轮 `make` 分配；状态机跨批次保持
+   - 行内容维护在 `lineEditor`（字节缓冲 + 光标）：←/→（ESC[C/D）、Ctrl+A/E 跳行首/行尾、Home/End（ESC[H/F、1~/4~/7~/8~）、Delete（ESC[3~）按光标位置删字；行尾插入逐字节回显，行中插入/删除整行重绘（`redrawLineCursor` 以 ESC[nD 定位光标）；历史回显/Tab 补全后光标复位行尾
    - `0xFF` IAC → 跳过 3 字节协商序列
    - `0x03`/`0x04` Ctrl+C/D → 返回 `io.EOF`
    - `0x7F`/`0x08` Backspace → 删字符并 `\r\033[K` 重绘
