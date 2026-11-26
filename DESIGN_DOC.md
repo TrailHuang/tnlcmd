@@ -285,7 +285,7 @@ telnet localhost 2323
 | M2 | **错误契约仍为字符串匹配**：`processCommand` 用 `strings.Contains(err.Error(), "incomplete command")` 判断分支，`FindCommand` 错误未导出 sentinel | `session.go:520`, `command_tree.go:367,432` | 定义 `ErrIncompleteCommand` 等 sentinel error |
 | M3 | **`Config.RootMode` 仍为 `interface{}`** | `types.go:46` | 收敛为内部类型或移除 |
 | M4 | **补全器存在未使用入口与重复逻辑**：`Complete` 与 `GetCompletions` 仅 `includeModeSwitch` 参数不同且生产路径均未调用；生产只使用 `GetNextLevelCompletions`/`GetParameterCompletions`/`GetCommandTreeSuggestions` | `completer.go:122-199,236-253` | 删除或合并死入口 |
-| M5 | **模式切换双路径**：`GetAvailableCommands` 生成的 `createModeChangeHandler`（闭包直接 `ChangeMode`）与 `processCommand` 的 ModeSwitch 树节点分支重复实现切换语义 | `mode.go:151-156`, `session.go:453-515` | 收敛为单一实现 |
+| M5 | ✅ **模式切换双路径**（已修复）：`GetAvailableCommands` 生成的 `createModeChangeHandler`（闭包直接 `ChangeMode`）与 `processCommand` 的 ModeSwitch 树节点分支重复实现切换语义 | `mode.go`, `session.go` | 已收敛为 `CommandContext.EnterMode` 单一实现（ChangeMode + 标准提示消息），两条路径均委托 |
 | M6 | **`SetConfig` 运行期语义不完整**：`port` 修改对已监听服务无效；`prompt` 仅更新 `rootMode`，其他模式及活动会话提示符不刷新（`UpdateAllSessionsPrompt` 未被接线） | `cmdline.go:133-166` | 文档化限制或补全联动 |
 | M7 | ✅ **历史非环形缓冲**（已修复）：容量超限时 `history[1:]` 头部裁剪，导致 O(n) 拷贝与底层数组指针漂移 | `history.go` | 已改为固定容量环形数组，覆盖写入 O(1) |
 | M8 | **Handler 无 ctx/超时，Stop 可被慢 Handler 拖住**：`Stop()` 持 `cmdline.mu` 调 `server.Stop()` → `wg.Wait()`，用户 Handler 内 `time.Sleep`/阻塞 I/O 会延迟关闭且无法中断 | `cmdline.go:204-219`, `server.go:76-95` | Handler 增加 ctx 参数；`Stop` 增加超时兜底 |
@@ -329,7 +329,7 @@ telnet localhost 2323
 9. **安全增强**（m7）：最大连接数、密码认证、可选 TLS、空闲会话回收（接线 `IsStale`）— 工单 05/06
 10. **行编辑增强**（m8）：左右方向键、Ctrl+A/E、命令别名 — 工单 07（依赖 01）
 11. **历史环形缓冲**（M7）— ✅ 已完成（2026-11-26，工单 01）：`internal/history` 改为固定容量环形数组（`buf`/`start`/`size`），容量满时覆盖最旧记录并前移起点，`Add` 为 O(1)；`Get`/`GetAll`/`Previous`/`Next` 公共 API 语义保持不变；新增回绕/去重/零容量用例与 `BenchmarkAddOverflow`（满容量写入 ~23 ns/op）；会话层上/下键历史浏览经集成测试验证与改动前一致
-12. **收敛模式切换与补全入口**（M4/M5）— 工单 03/04
+12. **收敛模式切换与补全入口**（M4/M5）— M5 ✅ 已完成（2026-11-26，工单 03）：新增 `CommandContext.EnterMode`（ChangeMode + `"Entering %s mode\r\n"` 消息）作为模式切换唯一实现路径，`processCommand` 的 ModeSwitch 分支、无 handler 中间节点回退分支与 `createModeChangeHandler` 均委托它；M4 待处理（工单 04）
 13. **热路径内存优化**（m2）：复用读缓冲 — ✅ 已完成（2026-11-26，工单 02）：`readLine` 读缓冲提升为会话级字段 `Session.readBuf`（`readBufSize = 1024`），会话创建时分配一次、全程复用；`BenchmarkReadLine` 显示每行 24 B/op、2 allocs/op（不再每轮读取分配 1KB）；IAC/ESC/UTF-8 跨批次状态机用例全部通过
 
 ### P3 — 长期演进

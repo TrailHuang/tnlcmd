@@ -129,6 +129,38 @@ func TestGetRootMode(t *testing.T) {
 	}
 }
 
+// TestEnterMode_UnifiedPath 验证 EnterMode 是模式切换语义的唯一实现：
+// ChangeMode 时机与提示消息格式一致，且切换 handler 与树节点分支共用它。
+func TestEnterMode_UnifiedPath(t *testing.T) {
+	root := NewCommandMode("root", "r>", "root mode")
+	sub := NewCommandMode("configure", "c#", "configuration")
+	root.AddSubMode(sub)
+
+	ctx := &CommandContext{CurrentMode: root, Path: []string{"root"}}
+
+	// 直接调用 EnterMode：应切换模式并返回标准提示消息
+	msg := ctx.EnterMode(sub)
+	if ctx.CurrentMode != sub {
+		t.Error("EnterMode did not switch CurrentMode")
+	}
+	if len(ctx.Path) != 2 || ctx.Path[0] != "root" || ctx.Path[1] != "configure" {
+		t.Errorf("EnterMode path = %v, want [root configure]", ctx.Path)
+	}
+	if msg != "Entering configuration mode\r\n" {
+		t.Errorf("EnterMode msg = %q, want %q", msg, "Entering configuration mode\r\n")
+	}
+
+	// GetAvailableCommands 生成的切换 handler 应委托同一实现
+	ctx.ChangeMode(root)
+	handler := ctx.createModeChangeHandler(sub)
+	if got := handler(nil); got != "Entering configuration mode\r\n" {
+		t.Errorf("mode switch handler msg = %q, want %q", got, "Entering configuration mode\r\n")
+	}
+	if ctx.CurrentMode != sub {
+		t.Error("mode switch handler did not switch CurrentMode")
+	}
+}
+
 // TestGetAvailableCommands_IncludesModeSwitch 验证可用命令包含视图切换命令。
 func TestGetAvailableCommands_IncludesModeSwitch(t *testing.T) {
 	root := NewCommandMode("root", "r>", "root")

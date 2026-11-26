@@ -249,7 +249,7 @@ tnlcmd/
 - `NewCommandMode`：自动规范 Prompt（根模式以 `>` 结尾，子模式以 `#` 结尾）。
 - `AddCommand`：同时写入平面 `Commands` map 与独立 `CommandTree`。
 - `AddSubMode`：建立父子关系。
-- `CommandContext`：维护 `CurrentMode` + `Path`，`ChangeMode` 重建路径链，`GetRootMode` 回溯到根，`GetAvailableCommands` 合并当前模式命令与所有视图切换命令。
+- `CommandContext`：维护 `CurrentMode` + `Path`，`ChangeMode` 重建路径链，`GetRootMode` 回溯到根，`EnterMode` 为模式切换语义唯一实现（ChangeMode + 标准提示消息，processCommand 树节点分支与 `GetAvailableCommands` 切换 handler 均委托），`GetAvailableCommands` 合并当前模式命令与所有视图切换命令。
 
 ---
 

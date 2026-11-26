@@ -148,10 +148,18 @@ func (m *CommandContext) GetRootMode() *CommandMode {
 	return current
 }
 
-// createModeChangeHandler 创建模式切换处理函数
+// EnterMode 切换到指定模式并返回进入提示消息。
+// 这是模式切换语义的唯一实现路径：processCommand 的 ModeSwitch 树节点分支、
+// 无 handler 中间节点回退分支与 GetAvailableCommands 生成的切换 handler
+// 均委托本方法，确保 ChangeMode 时机与提示消息格式全链路一致。
+func (c *CommandContext) EnterMode(newMode *CommandMode) string {
+	c.ChangeMode(newMode)
+	return fmt.Sprintf("Entering %s mode\r\n", newMode.Description)
+}
+
+// createModeChangeHandler 创建模式切换处理函数（委托 EnterMode）
 func (c *CommandContext) createModeChangeHandler(mode *CommandMode) types.CommandHandler {
 	return func(args []string) string {
-		c.ChangeMode(mode)
-		return fmt.Sprintf("Entering %s mode\r\n", mode.Description)
+		return c.EnterMode(mode)
 	}
 }

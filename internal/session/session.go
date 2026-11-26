@@ -438,15 +438,14 @@ func (s *Session) processCommand(ctx context.Context, cmd string) error {
 		if err == nil && node != nil {
 			s.mu.RUnlock()
 
-			// 处理视图切换命令
+			// 处理视图切换命令（切换语义统一委托 CommandContext.EnterMode）
 			if node.Type == types.NodeTypeModeSwitch {
 				if s.context != nil && len(parts) == len(matchedPath) {
 					// 查找要切换到的视图
 					modeName := node.ModeName
 					rootMode := s.context.GetRootMode()
 					if subMode, exists := rootMode.Children[modeName]; exists {
-						s.context.ChangeMode(subMode)
-						s.writerWrite(fmt.Sprintf("Entering %s mode\r\n", subMode.Description))
+						s.writerWrite(s.context.EnterMode(subMode))
 						s.updateCommands()
 						return nil
 					}
@@ -490,12 +489,11 @@ func (s *Session) processCommand(ctx context.Context, cmd string) error {
 			// 如果没有 handler 但有匹配的节点，说明是中间节点（子命令前缀）
 			// 显示该节点下的子命令选项
 			if s.context != nil && node != nil {
-				// 检查是否有子节点可以切换到子模式
+				// 检查是否有子节点可以切换到子模式（切换语义统一委托 EnterMode）
 				if len(parts) == len(matchedPath) {
 					modeName := parts[len(parts)-1]
 					if subMode, exists := s.context.CurrentMode.Children[modeName]; exists {
-						s.context.ChangeMode(subMode)
-						s.writerWrite(fmt.Sprintf("Entering %s mode\r\n", subMode.Description))
+						s.writerWrite(s.context.EnterMode(subMode))
 						s.updateCommands()
 						return nil
 					}
