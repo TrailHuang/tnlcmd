@@ -3,9 +3,11 @@ package session
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -514,5 +516,85 @@ func TestSession_MultipleTwoByteIACThenQuestionMark(t *testing.T) {
 	}
 	if got, err := pt.readUntil("Show status", 3*time.Second); err != nil {
 		t.Fatalf("? failed after multiple 2-byte IAC (regression): %v (buf=%q)", err, got)
+	}
+}
+
+// TestSession_Pagination_TwoByteIACBeforeKey 验证分页等待按键时 2 字节 IAC 命令
+// （如客户端 keep-alive NOP/GA）不会被误吞后续用户字节——修复 S3 的回归测试。
+// 旧实现对 IAC 一律多读 2 字节，会吞掉 NOP 后紧跟的翻页键。
+func TestSession_Pagination_TwoByteIACBeforeKey(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	rootMode.AddCommand("list", "List", func(args []string) string {
+		return "L1\r\nL2\r\nL3\r\nL4\r\nL5\r\n"
+	})
+
+	pt := newPipeTest(t, 2, rootMode)
+	defer pt.close()
+
+	if err := pt.write("list\r\n"); err != nil {
+		t.Fatalf("write list failed: %v", err)
+	}
+	if got, err := pt.readUntil("--More--", 3*time.Second); err != nil {
+		t.Fatalf("did not see --More--: %v (buf=%q)", err, got)
+	}
+	// 先发送一个 2 字节 IAC（NOP），再发送 Space 翻页。
+	// 修复前：NOP 会额外吞掉 Space，导致会话继续等待、测试超时。
+	if err := pt.write(string([]byte{0xFF, 0xF1})); err != nil {
+		t.Fatalf("write NOP failed: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := pt.write(" "); err != nil {
+		t.Fatalf("write space failed: %v", err)
+	}
+	if got, err := pt.readUntil("L3", 3*time.Second); err != nil {
+		t.Fatalf("paging key lost after 2-byte IAC (S3 regression): %v (buf=%q)", err, got)
+	}
+}
+
+// TestSession_UpdatePromptConcurrent 验证会话运行期间并发调用 UpdatePrompt
+// 不会引发数据竞争或破坏输出流（-race 下运行）——修复 S1 的回归测试。
+// 修复前 UpdatePrompt 直接写 bufio.Writer，与主循环并发写同一连接。
+func TestSession_UpdatePromptConcurrent(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	rootMode.AddCommand("echo", "Echo", func(args []string) string {
+		return "RESULT_MARKER\r\n"
+	})
+
+	pt := newPipeTest(t, 0, rootMode)
+	defer pt.close()
+
+	// 会话运行期间从外部 goroutine 并发更新提示符
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			pt.sess.UpdatePrompt(fmt.Sprintf("P%d_END>", i%3))
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	// 期间正常执行命令
+	if err := pt.write("echo\r\n"); err != nil {
+		t.Fatalf("write command failed: %v", err)
+	}
+	if got, err := pt.readUntil("RESULT_MARKER", 3*time.Second); err != nil {
+		t.Fatalf("command failed during concurrent UpdatePrompt: %v (buf=%q)", err, got)
+	}
+	close(stop)
+	wg.Wait()
+
+	// 提示符字段最终被更新为某次调用写入的值
+	pt.sess.mu.RLock()
+	final := pt.sess.prompt
+	pt.sess.mu.RUnlock()
+	if !strings.HasPrefix(final, "P") || !strings.HasSuffix(final, "_END>") {
+		t.Errorf("prompt not updated by UpdatePrompt: %q", final)
 	}
 }

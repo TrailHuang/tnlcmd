@@ -42,7 +42,9 @@ func main() {
 	}
 
 	for _, cmd := range commands {
-		cmdline.RegisterCommand(cmd.name, cmd.desc, cmd.handler)
+		if err := cmdline.RegisterCommand(cmd.name, cmd.desc, cmd.handler); err != nil {
+			log.Fatalf("register command %q: %v", cmd.name, err)
+		}
 	}
 
 	// 启动命令行服务

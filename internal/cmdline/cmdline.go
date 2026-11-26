@@ -69,10 +69,15 @@ func NewCmdLine(config *Config) *CmdLine {
 	}
 }
 
-// RegisterCommand 注册命令到根模式
-func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandler, detailedDescription ...string) {
+// RegisterCommand 注册命令到根模式。
+// Start 之后命令树对各会话只读（会话 goroutine 并发遍历），此时调用将返回错误。
+func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandler, detailedDescription ...string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.isRunning {
+		return fmt.Errorf("cannot register command %q after Start: command trees are shared read-only across active sessions", name)
+	}
 
 	// 向后兼容：添加到平面命令存储（包含多行详细描述）
 	c.rootMode.AddCommand(name, description, handler, detailedDescription...)
@@ -82,6 +87,7 @@ func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandl
 	if err != nil {
 		slog.Warn("failed to add command to tree", "error", err)
 	}
+	return nil
 }
 
 // findOrCreateMode 查找或创建模式路径
@@ -112,21 +118,33 @@ func (c *CmdLine) findOrCreateMode(modePath string, description string) *mode.Co
 	return subMode
 }
 
-// RegisterModeCommand 注册命令到指定模式
-func (c *CmdLine) RegisterModeCommand(modePath string, name, description string, handler CommandHandler, detailedDescription ...string) {
+// RegisterModeCommand 注册命令到指定模式。
+// Start 之后命令树对各会话只读，此时调用将返回错误。
+func (c *CmdLine) RegisterModeCommand(modePath string, name, description string, handler CommandHandler, detailedDescription ...string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.isRunning {
+		return fmt.Errorf("cannot register mode command %q after Start: command trees are shared read-only across active sessions", name)
+	}
 
 	currentMode := c.findOrCreateMode(modePath, fmt.Sprintf("%s configuration", modePath))
 	currentMode.AddCommand(name, description, handler, detailedDescription...)
+	return nil
 }
 
-// CreateMode 创建新的命令模式
-func (c *CmdLine) CreateMode(modePath string, description string) {
+// CreateMode 创建新的命令模式。
+// Start 之后模式树对各会话只读，此时调用将返回错误。
+func (c *CmdLine) CreateMode(modePath string, description string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.isRunning {
+		return fmt.Errorf("cannot create mode %q after Start: mode tree is shared read-only across active sessions", modePath)
+	}
+
 	c.findOrCreateMode(modePath, description)
+	return nil
 }
 
 // SetConfig 动态设置配置参数
@@ -236,7 +254,7 @@ func (c *CmdLine) CreateCloseConnectionHandler() types.CommandHandler {
 
 // registerBuiltinCommands 注册内置命令
 func (c *CmdLine) registerBuiltinCommands() {
-	// 添加退出命令
-	c.RegisterCommand("exit", "Exit and close connection", c.CreateCloseConnectionHandler())
-	c.RegisterCommand("quit", "Exit and close connection", c.CreateCloseConnectionHandler())
+	// 添加退出命令（Start 流程内、isRunning 置位前调用，注册必然成功）
+	_ = c.RegisterCommand("exit", "Exit and close connection", c.CreateCloseConnectionHandler())
+	_ = c.RegisterCommand("quit", "Exit and close connection", c.CreateCloseConnectionHandler())
 }

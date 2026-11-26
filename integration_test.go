@@ -40,6 +40,8 @@ type integrationTest struct {
 }
 
 // newIntegrationTest 创建新的集成测试环境。
+// 注意：此 helper 不会启动服务器。测试应先完成命令注册（Start 后命令树只读），
+// 再调用 it.startServer() 与 it.connect()。
 func newIntegrationTest(t *testing.T) *integrationTest {
 	t.Helper()
 
@@ -59,9 +61,6 @@ func newIntegrationTest(t *testing.T) *integrationTest {
 	}
 
 	srv := server.NewTelnetServerWithContext(config, ctx)
-	if err := srv.Start(); err != nil {
-		t.Fatalf("server start failed: %v", err)
-	}
 
 	return &integrationTest{
 		t:        t,
@@ -69,6 +68,14 @@ func newIntegrationTest(t *testing.T) *integrationTest {
 		rootMode: rootMode,
 		context:  ctx,
 		server:   srv,
+	}
+}
+
+// startServer 启动测试服务器。必须在所有命令注册完成后调用。
+func (it *integrationTest) startServer() {
+	it.t.Helper()
+	if err := it.server.Start(); err != nil {
+		it.t.Fatalf("server start failed: %v", err)
 	}
 }
 
@@ -227,6 +234,7 @@ func TestIntegration_SessionToCommandTreeInteraction(t *testing.T) {
 		return "DETAIL_RESULT\r\n"
 	})
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 
@@ -270,6 +278,7 @@ func TestIntegration_ModeSwitchCommandTreeUpdate(t *testing.T) {
 	it.context.CommandTree = it.rootMode.CommandTree
 	it.context.CurrentMode = it.rootMode
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 
@@ -303,6 +312,7 @@ func TestIntegration_CompleterCommandTreeSync(t *testing.T) {
 
 	it.context.CommandTree = it.rootMode.CommandTree
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 
@@ -383,6 +393,7 @@ func TestIntegration_DataFlow_HistoryPersistence(t *testing.T) {
 
 	it.context.CommandTree = it.rootMode.CommandTree
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 
@@ -506,6 +517,7 @@ func TestIntegration_Exception_EmptyInput(t *testing.T) {
 	it.rootMode.AddCommand("test", "Test", func(args []string) string { return "OK\r\n" })
 	it.context.CommandTree = it.rootMode.CommandTree
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 
@@ -605,6 +617,7 @@ func TestIntegration_Exception_IncompleteCommand(t *testing.T) {
 	it.rootMode.AddCommand("show interface", "Show interface", func(args []string) string { return "OK\r\n" })
 	it.context.CommandTree = it.rootMode.CommandTree
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 
@@ -632,6 +645,7 @@ func TestIntegration_Exception_TooManyArguments(t *testing.T) {
 	it.rootMode.AddCommand("set value <1-10>", "Set value", func(args []string) string { return "OK\r\n" })
 	it.context.CommandTree = it.rootMode.CommandTree
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 
@@ -661,6 +675,7 @@ func TestIntegration_Exception_CtrlCInterrupt(t *testing.T) {
 	})
 	it.context.CommandTree = it.rootMode.CommandTree
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 
@@ -697,6 +712,7 @@ func TestIntegration_Exception_ClientDisconnect(t *testing.T) {
 	})
 	it.context.CommandTree = it.rootMode.CommandTree
 
+	it.startServer()
 	it.connect()
 
 	// 发送命令后立即断开
@@ -719,6 +735,7 @@ func TestIntegration_Exception_NetworkTimeout(t *testing.T) {
 	it.rootMode.AddCommand("test", "Test", func(args []string) string { return "OK\r\n" })
 	it.context.CommandTree = it.rootMode.CommandTree
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 
@@ -861,6 +878,7 @@ func TestIntegration_BusinessFlow_ModeHierarchyNavigation(t *testing.T) {
 
 	it.context.CommandTree = it.rootMode.CommandTree
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 
@@ -1382,6 +1400,7 @@ func TestIntegration_Security_BufferOverflowPrevention(t *testing.T) {
 	})
 	it.context.CommandTree = it.rootMode.CommandTree
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 
@@ -1580,6 +1599,7 @@ func TestIntegration_EdgeCase_UnicodeInput(t *testing.T) {
 	})
 	it.context.CommandTree = it.rootMode.CommandTree
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 
@@ -1605,6 +1625,7 @@ func TestIntegration_EdgeCase_SpecialCharacters(t *testing.T) {
 	})
 	it.context.CommandTree = it.rootMode.CommandTree
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 
@@ -1639,6 +1660,7 @@ func TestIntegration_EdgeCase_RapidInput(t *testing.T) {
 	})
 	it.context.CommandTree = it.rootMode.CommandTree
 
+	it.startServer()
 	it.connect()
 	defer it.disconnect()
 

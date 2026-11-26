@@ -51,15 +51,21 @@ func main() {
 	}
 
 	for _, cmd := range rootCommands {
+		var err error
 		if cmd.detailedDesc != "" {
-			cmdline.RegisterCommand(cmd.name, cmd.desc, cmd.handler, cmd.detailedDesc)
+			err = cmdline.RegisterCommand(cmd.name, cmd.desc, cmd.handler, cmd.detailedDesc)
 		} else {
-			cmdline.RegisterCommand(cmd.name, cmd.desc, cmd.handler)
+			err = cmdline.RegisterCommand(cmd.name, cmd.desc, cmd.handler)
+		}
+		if err != nil {
+			log.Fatalf("register root command %q: %v", cmd.name, err)
 		}
 	}
 
 	// 创建配置模式
-	cmdline.CreateMode("configure", "global configuration")
+	if err := cmdline.CreateMode("configure", "global configuration"); err != nil {
+		log.Fatalf("create configure mode: %v", err)
+	}
 
 	// 注册配置模式命令
 	configCommands := []struct {
@@ -80,14 +86,20 @@ func main() {
 	}
 
 	for _, cmd := range configCommands {
+		var err error
 		if cmd.detailedDesc != "" {
-			cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler, cmd.detailedDesc)
+			err = cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler, cmd.detailedDesc)
 		} else {
-			cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler)
+			err = cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler)
+		}
+		if err != nil {
+			log.Fatalf("register %s command %q: %v", cmd.mode, cmd.name, err)
 		}
 	}
 	// 创建接口配置模式
-	cmdline.CreateMode("interface", "interface configuration")
+	if err := cmdline.CreateMode("interface", "interface configuration"); err != nil {
+		log.Fatalf("create interface mode: %v", err)
+	}
 
 	// 注册接口配置模式命令
 	interfaceCommands := []struct {
@@ -102,10 +114,14 @@ func main() {
 	}
 
 	for _, cmd := range interfaceCommands {
+		var err error
 		if cmd.detailedDesc != "" {
-			cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler, cmd.detailedDesc)
+			err = cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler, cmd.detailedDesc)
 		} else {
-			cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler)
+			err = cmdline.RegisterModeCommand(cmd.mode, cmd.name, cmd.desc, cmd.handler)
+		}
+		if err != nil {
+			log.Fatalf("register %s command %q: %v", cmd.mode, cmd.name, err)
 		}
 	}
 

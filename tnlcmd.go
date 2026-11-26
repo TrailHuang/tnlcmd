@@ -25,19 +25,22 @@ func NewCmdLine(config *Config) *CmdLine {
 	}
 }
 
-// RegisterCommand 注册命令到根模式
-func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandler, detailedDescription ...string) {
-	c.CmdLine.RegisterCommand(name, description, handler, detailedDescription...)
+// RegisterCommand 注册命令到根模式。
+// Start 之后调用会返回错误：命令树在各活动会话间共享且只读。
+func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandler, detailedDescription ...string) error {
+	return c.CmdLine.RegisterCommand(name, description, handler, detailedDescription...)
 }
 
-// RegisterModeCommand 注册命令到指定模式
-func (c *CmdLine) RegisterModeCommand(modePath string, name, description string, handler CommandHandler, detailedDescription ...string) {
-	c.CmdLine.RegisterModeCommand(modePath, name, description, handler, detailedDescription...)
+// RegisterModeCommand 注册命令到指定模式。
+// Start 之后调用会返回错误：命令树在各活动会话间共享且只读。
+func (c *CmdLine) RegisterModeCommand(modePath string, name, description string, handler CommandHandler, detailedDescription ...string) error {
+	return c.CmdLine.RegisterModeCommand(modePath, name, description, handler, detailedDescription...)
 }
 
-// CreateMode 创建新的命令模式
-func (c *CmdLine) CreateMode(modePath string, description string) {
-	c.CmdLine.CreateMode(modePath, description)
+// CreateMode 创建新的命令模式。
+// Start 之后调用会返回错误：模式树在各活动会话间共享且只读。
+func (c *CmdLine) CreateMode(modePath string, description string) error {
+	return c.CmdLine.CreateMode(modePath, description)
 }
 
 // Start 启动命令行服务

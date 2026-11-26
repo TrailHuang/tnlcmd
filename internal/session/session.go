@@ -99,8 +99,13 @@ func NewSessionWithContext(conn net.Conn, config *types.Config, context *mode.Co
 	return s
 }
 
-// updateCommands 更新当前可用的命令列表
+// updateCommands 更新当前可用的命令列表与提示符。
+// 写操作持写锁，与外部 goroutine 的 UpdatePrompt / IsStale 互斥；
+// 主循环内调用方（processCommand / 初始化）已持有 RLock 时依赖 Go 的 RWLock 不可重入语义，
+// 故本方法不得在持有任何锁的状态下调用。
 func (s *Session) updateCommands() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.context != nil {
 		s.commands = s.context.GetAvailableCommands()
 		s.prompt = s.context.CurrentMode.Prompt
@@ -143,7 +148,9 @@ func (s *Session) Handle(ctx context.Context) error {
 			return err
 		}
 
+		s.mu.Lock()
 		s.lastActive = time.Now()
+		s.mu.Unlock()
 
 		if debuglog.Enabled() {
 			debuglog.Debug("session", "command_line_received",
@@ -430,10 +437,9 @@ func (s *Session) processCommand(cmd string) error {
 		return nil
 	}
 
+	// 仅在读取 context/mode 结构时持读锁，写锁操作（updateCommands）在锁外执行，
+	// 避免 RLock 下调用加写锁的方法导致死锁。
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	// 首先检查当前视图的命令树
 	if s.context != nil && s.context.CurrentMode != nil && s.context.CurrentMode.CommandTree != nil {
 		node, matchedPath, args, err := s.context.CurrentMode.CommandTree.FindCommand(parts)
 
@@ -451,6 +457,8 @@ func (s *Session) processCommand(cmd string) error {
 		}
 
 		if err == nil && node != nil {
+			s.mu.RUnlock()
+
 			// 处理视图切换命令
 			if node.Type == types.NodeTypeModeSwitch {
 				if s.context != nil && len(parts) == len(matchedPath) {
@@ -517,13 +525,16 @@ func (s *Session) processCommand(cmd string) error {
 				s.writerWrite(fmt.Sprintf("%% Incomplete command. \r\n"))
 				return nil
 			}
+			return nil
 		} else if err != nil && strings.Contains(err.Error(), "incomplete command") {
+			s.mu.RUnlock()
 			// FindCommand 返回 incomplete command，说明输入的命令不完整
 			// 按设备规范仅提示 % Incomplete command，使用 ? 查看候选
 			s.writerWrite(fmt.Sprintf("%% Incomplete command. Use '?' to view options.\r\n"))
 			return nil
 		}
 	}
+	s.mu.RUnlock()
 
 	s.writerWrite(fmt.Sprintf("Unknown command: %s\r\n", strings.Join(parts, " ")))
 	s.writerWrite("Type '?' for available commands\r\n")
@@ -595,6 +606,11 @@ func (s *Session) writeResult(result string) error {
 }
 
 // readPagingKey 在分页提示后读取用户的一个按键，跳过 Telnet IAC 序列与 ANSI 方向键序列。
+// IAC 处理规则与 readLine 主状态机保持一致：
+//   - IAC + 0xF1-0xF9/0xFF（NOP/GA/AYT/EC/EL/IAC-IAC 等）为 2 字节序列，仅再读 1 字节
+//   - IAC + 0xFB-0xFE（WILL/WONT/DO/DONT）为 3 字节序列，再读命令与选项 2 字节
+//   - IAC SB(0xFA) 进入子协商，跳过至 IAC SE(0xF0)
+//
 // 方向键（ESC [ X）视为"继续翻页"（返回空格的语义）。
 func (s *Session) readPagingKey() (byte, error) {
 	for {
@@ -603,12 +619,34 @@ func (s *Session) readPagingKey() (byte, error) {
 			return 0, err
 		}
 		switch b {
-		case 0xFF: // IAC，跳过 2 字节 telnet 协商序列
-			if _, err := s.reader.ReadByte(); err != nil {
+		case 0xFF: // IAC
+			cmd, err := s.reader.ReadByte()
+			if err != nil {
 				return 0, err
 			}
-			if _, err := s.reader.ReadByte(); err != nil {
-				return 0, err
+			switch {
+			case cmd == 0xFA: // SB → 子协商，跳过直到 IAC SE
+				for {
+					sb, err := s.reader.ReadByte()
+					if err != nil {
+						return 0, err
+					}
+					if sb != 0xFF {
+						continue
+					}
+					iac, err := s.reader.ReadByte()
+					if err != nil {
+						return 0, err
+					}
+					if iac == 0xF0 { // SE，子协商结束
+						break
+					}
+				}
+			case cmd == 0xFF || (cmd >= 0xF1 && cmd <= 0xF9): // 2 字节命令，无选项字节
+			case cmd >= 0xFB && cmd <= 0xFE: // WILL/WONT/DO/DONT → 还需选项字节
+				if _, err := s.reader.ReadByte(); err != nil {
+					return 0, err
+				}
 			}
 			continue
 		case 0x1B: // ESC，可能是方向键序列 ESC [ X
@@ -755,20 +793,14 @@ func (s *Session) flushWriter() error {
 	return nil
 }
 
-// UpdatePrompt 更新会话的提示符
+// UpdatePrompt 更新会话的提示符。
+// 会话主循环是 bufio.Writer 与 writeErr 的唯一写入者，因此这里只更新字段，
+// 由主循环在下一轮 readLine 时绘制新提示符；绝不在此处直接写连接（会与主循环并发写）。
 func (s *Session) UpdatePrompt(prompt string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.prompt = prompt
-
-	// 如果当前有活动连接，重新显示提示符
-	if s.conn != nil && !s.isClosed {
-		// 清除当前行并显示新的提示符
-		s.writerWrite("\r\x1b[K")
-		s.writerWrite(s.prompt)
-		s.flushWriter()
-	}
 }
 
 // normalizeLineEndings 规范化换行符，确保使用 \r\n
