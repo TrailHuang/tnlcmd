@@ -901,3 +901,12 @@ func (s *Session) Close() {
 		s.conn.Close()
 	}
 }
+
+// IsStale 判断会话空闲时长是否已超过 threshold（自最近一次成功读取输入行起算）。
+// 由服务端空闲回收 goroutine 周期性调用；关闭连接（Close）会使阻塞在
+// readLine 中的会话读取立即出错返回，从而触发会话退出与资源清理。
+func (s *Session) IsStale(threshold time.Duration) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return time.Since(s.lastActive) >= threshold
+}

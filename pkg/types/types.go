@@ -4,6 +4,7 @@ package types
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // CommandHandler 命令处理函数类型（旧签名，保持向后兼容）
@@ -65,4 +66,12 @@ type Config struct {
 	MaxHistory int
 	PageSize   int         // 分页大小（行数）；<=0 表示禁用分页，一次性输出全部内容
 	RootMode   interface{} // 使用 interface{} 避免循环导入
+
+	// MaxConnections 最大并发连接数上限；0（默认）表示不限制。
+	// 超限时新连接收到拒绝提示后立即关闭。
+	MaxConnections int
+
+	// IdleTimeout 空闲会话回收阈值；0（默认）表示禁用回收。
+	// 会话空闲（无输入）超过该时长后由服务端主动关闭连接。
+	IdleTimeout time.Duration
 }

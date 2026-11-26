@@ -52,6 +52,11 @@ func (ts *TelnetServer) Start() error {
 	slog.Debug("listener established, accepting connections", "port", ts.config.Port)
 	go ts.acceptConnections()
 
+	// 启用空闲会话回收（IdleTimeout > 0 时）
+	if ts.config.IdleTimeout > 0 {
+		go ts.reapIdleSessions()
+	}
+
 	return nil
 }
 
@@ -150,8 +155,14 @@ func (ts *TelnetServer) handleConnection(conn net.Conn) {
 	// 创建会话
 	session := session.NewSessionWithContext(conn, ts.config, context)
 
-	// 注册会话
+	// 注册会话，并在同一临界区内执行连接数上限检查，
+	// 保证"检查 + 注册"原子性，避免并发连接竞争上限时超发
 	ts.mu.Lock()
+	if ts.config.MaxConnections > 0 && len(ts.sessions) >= ts.config.MaxConnections {
+		ts.mu.Unlock()
+		ts.rejectConnection(conn)
+		return
+	}
 	ts.sessions[conn] = session
 	ts.mu.Unlock()
 
@@ -176,6 +187,69 @@ func (ts *TelnetServer) handleConnection(conn net.Conn) {
 	delete(ts.sessions, conn)
 	ts.mu.Unlock()
 	conn.Close()
+}
+
+// connLimitMsg 超过最大连接数时向客户端发送的拒绝提示（Cisco 风格 % 前缀）
+const connLimitMsg = "\r\n% Too many connections. Please try again later.\r\n"
+
+// rejectTimeout 向超限连接写入拒绝提示的兜底超时，防止慢客户端拖住 accept 路径
+const rejectTimeout = 3 * time.Second
+
+// rejectConnection 礼貌拒绝超限连接：发送提示后立即关闭
+func (ts *TelnetServer) rejectConnection(conn net.Conn) {
+	slog.Info("connection rejected: max connections reached",
+		"remote", conn.RemoteAddr().String(),
+		"max", ts.config.MaxConnections)
+	if debuglog.Enabled() {
+		debuglog.Debug("server", "conn_rejected",
+			"remote", conn.RemoteAddr().String(),
+			"max", ts.config.MaxConnections)
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(rejectTimeout))
+	if _, err := conn.Write([]byte(connLimitMsg)); err != nil {
+		slog.Debug("failed to send rejection message", "remote", conn.RemoteAddr().String(), "err", err)
+	}
+	conn.Close()
+}
+
+// reapIdleSessions 周期性回收空闲超过 IdleTimeout 的会话。
+// 由 Start 在 IdleTimeout > 0 时启动，服务器 ctx 取消时退出。
+func (ts *TelnetServer) reapIdleSessions() {
+	// 扫描间隔取阈值的一半，下限 100ms 保证小阈值场景下回收及时
+	interval := ts.config.IdleTimeout / 2
+	if interval < 100*time.Millisecond {
+		interval = 100 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ts.ctx.Done():
+			return
+		case <-ticker.C:
+			ts.closeStaleSessions()
+		}
+	}
+}
+
+// closeStaleSessions 关闭所有空闲超时的会话连接。
+// 先在读锁下收集过期会话，再在锁外逐个关闭：Close 会解除会话 readLine 的阻塞，
+// 会话 goroutine 自行完成退出与 map 清理。
+func (ts *TelnetServer) closeStaleSessions() {
+	ts.mu.RLock()
+	var stale []*session.Session
+	for _, s := range ts.sessions {
+		if s.IsStale(ts.config.IdleTimeout) {
+			stale = append(stale, s)
+		}
+	}
+	ts.mu.RUnlock()
+
+	for _, s := range stale {
+		slog.Info("reaping idle session", "idle_timeout", ts.config.IdleTimeout)
+		s.Close()
+	}
 }
 
 // UpdateAllSessionsPrompt 更新所有活动会话的提示符

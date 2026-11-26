@@ -3,6 +3,7 @@ package cmdline
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestRegisterAfterStartRejected 验证 Start 后调用注册 API 返回错误（S2 修复的回归测试）。
@@ -90,5 +91,46 @@ func TestSetConfigAfterStart(t *testing.T) {
 	}
 	if err := c.SetConfig("pagesize", "10"); err != nil {
 		t.Errorf("SetConfig(pagesize) after Start should succeed, got: %v", err)
+	}
+}
+
+// TestSetConfig_SecurityKeys 验证 SetConfig 支持 maxconnections 与 idletimeout 两个安全 key。
+// 回归背景：工单 05 新增字段后未接入 SetConfig，示例程序以 "_ =" 吞掉 unknown key 错误，
+// 导致配置静默失效（maxconnections=1 时仍能建立多个 telnet 连接）。
+func TestSetConfig_SecurityKeys(t *testing.T) {
+	c := NewCmdLine(nil)
+
+	if err := c.SetConfig("maxconnections", "3"); err != nil {
+		t.Fatalf("SetConfig(maxconnections) failed: %v", err)
+	}
+	if c.config.MaxConnections != 3 {
+		t.Errorf("MaxConnections = %d, want 3", c.config.MaxConnections)
+	}
+
+	// 负数与非数字必须被拒绝
+	if err := c.SetConfig("maxconnections", "-1"); err == nil {
+		t.Error("SetConfig(maxconnections, -1) should fail")
+	}
+	if err := c.SetConfig("maxconnections", "abc"); err == nil {
+		t.Error("SetConfig(maxconnections, abc) should fail")
+	}
+
+	// idletimeout 接受 Go duration 语法
+	if err := c.SetConfig("idletimeout", "5m"); err != nil {
+		t.Fatalf("SetConfig(idletimeout, 5m) failed: %v", err)
+	}
+	if c.config.IdleTimeout != 5*time.Minute {
+		t.Errorf("IdleTimeout = %v, want 5m", c.config.IdleTimeout)
+	}
+	if err := c.SetConfig("idletimeout", "30s"); err != nil {
+		t.Fatalf("SetConfig(idletimeout, 30s) failed: %v", err)
+	}
+	if c.config.IdleTimeout != 30*time.Second {
+		t.Errorf("IdleTimeout = %v, want 30s", c.config.IdleTimeout)
+	}
+
+	// 纯数字（会被 ParseDuration 解释为纳秒级歧义写法）必须被拒绝
+	if err := c.SetConfig("idletimeout", "5"); err == nil {
+		t.Error("SetConfig(idletimeout, 5) should fail (ambiguous unit)")
 	}
 }

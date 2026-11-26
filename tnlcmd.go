@@ -76,5 +76,12 @@ func DefaultConfig() *Config {
 		WelcomeMsg: "Welcome to Command Line Interface!\r\nType '?' for available commands.\r\n",
 		MaxHistory: 100,
 		PageSize:   24,
+
+		// 安全能力默认关闭（0 值）：不限制连接数、不回收空闲会话。
+		// 需要时按需设置，例如：
+		//   MaxConnections: 10,
+		//   IdleTimeout:    5 * time.Minute,
+		MaxConnections: 0,
+		IdleTimeout:    0,
 	}
 }

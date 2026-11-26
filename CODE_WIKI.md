@@ -165,9 +165,10 @@ tnlcmd/
 ### 4.4 `internal/server` — Telnet TCP 服务器
 
 `TelnetServer` 负责：
-- `Start()`：`net.Listen("tcp", :port)` 并启动 `acceptConnections` goroutine。
+- `Start()`：`net.Listen("tcp", :port)` 并启动 `acceptConnections` goroutine；`Config.IdleTimeout > 0` 时额外启动 `reapIdleSessions` 回收 goroutine。
 - `acceptConnections()`：循环 `Accept`，每连接开一个 goroutine 调 `handleConnection`。
-- `handleConnection`：**复制** `CommandContext`（浅拷贝 `CurrentMode` 指针），为每连接创建 `Session` 并调用 `session.Handle(ctx)`。
+- `handleConnection`：**复制** `CommandContext`（浅拷贝 `CurrentMode` 指针），为每连接创建 `Session`；注册与 `Config.MaxConnections` 上限检查在同一临界区原子完成，超限连接收 `% Too many connections` 提示后关闭。
+- `reapIdleSessions` / `closeStaleSessions`：按阈值一半间隔扫描（下限 100ms），`Session.IsStale` 判定空闲超时后锁外 `Close`，解除会话 `readLine` 阻塞使其自行退出清理。
 - `Stop()`：`cancel()` context、关闭 listener、关闭所有会话。
 - 维护 `sessions map[net.Conn]*session.Session` 与 `sync.RWMutex`。
 

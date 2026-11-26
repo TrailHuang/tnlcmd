@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/TrailHuang/tnlcmd/internal/commandtree"
 	"github.com/TrailHuang/tnlcmd/internal/mode"
@@ -198,6 +199,19 @@ func (c *CmdLine) SetConfig(key, value string) error {
 			return fmt.Errorf("invalid pagesize value %q: must be a non-negative integer", value)
 		}
 		c.config.PageSize = v
+	case "maxconnections":
+		v, err := strconv.Atoi(value)
+		if err != nil || v < 0 {
+			return fmt.Errorf("invalid maxconnections value %q: must be a non-negative integer", value)
+		}
+		c.config.MaxConnections = v
+	case "idletimeout":
+		// 支持 Go duration 语法（"5m"、"30s"、"1m30s"），不支持纯数字（避免误当纳秒/秒）
+		v, err := time.ParseDuration(value)
+		if err != nil || v < 0 {
+			return fmt.Errorf("invalid idletimeout value %q: must be a non-negative duration like \"5m\" or \"30s\"", value)
+		}
+		c.config.IdleTimeout = v
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}

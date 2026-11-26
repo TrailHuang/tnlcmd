@@ -19,6 +19,11 @@ func main() {
 	// 创建命令行接口配置
 	config := tnlcmd.DefaultConfig()
 
+	// 安全能力示例：最多 1 个并发连接，空闲 5 分钟回收。
+	// 注意 IdleTimeout 是 time.Duration（此处亦可经 SetConfig("idletimeout", "5m") 设置）
+	config.MaxConnections = 10
+	config.IdleTimeout = 5 * time.Minute
+
 	// 支持通过环境变量 TNLCMD_PORT 覆盖端口，便于多实例并行测试
 	if p := os.Getenv("TNLCMD_PORT"); p != "" {
 		if port, err := strconv.Atoi(p); err == nil {
