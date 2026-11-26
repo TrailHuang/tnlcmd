@@ -21,7 +21,6 @@ func freeServer(t *testing.T, welcome string, rootMode *mode.CommandMode) (*Teln
 		WelcomeMsg: welcome,
 		MaxHistory: 10,
 		PageSize:   0,
-		RootMode:   rootMode,
 	}
 	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
 	srv := NewTelnetServerWithContext(config, ctx)
@@ -180,7 +179,6 @@ func TestServer_MaxConnectionsRejects(t *testing.T) {
 		Port:           0,
 		WelcomeMsg:     "WELCOME_MARKER\r\n",
 		MaxConnections: 1,
-		RootMode:       rootMode,
 	}
 	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
 	srv := NewTelnetServerWithContext(config, ctx)
@@ -239,7 +237,6 @@ func TestServer_MaxConnectionsConcurrentRace(t *testing.T) {
 		Port:           0,
 		WelcomeMsg:     "WELCOME_MARKER\r\n",
 		MaxConnections: maxConns,
-		RootMode:       rootMode,
 	}
 	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
 	srv := NewTelnetServerWithContext(config, ctx)
@@ -350,7 +347,6 @@ func TestServer_PasswordAuthSuccess(t *testing.T) {
 		WelcomeMsg:      "WELCOME_MARKER\r\n",
 		Password:        "secret",
 		MaxAuthAttempts: 3,
-		RootMode:        rootMode,
 	}
 	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
 	srv := NewTelnetServerWithContext(config, ctx)
@@ -403,7 +399,6 @@ func TestServer_PasswordNotEchoed(t *testing.T) {
 		Port:       0,
 		WelcomeMsg: "WELCOME_MARKER\r\n",
 		Password:   "topsecret",
-		RootMode:   rootMode,
 	}
 	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
 	srv := NewTelnetServerWithContext(config, ctx)
@@ -439,7 +434,6 @@ func TestServer_PasswordAuthMaxAttemptsExceeded(t *testing.T) {
 		WelcomeMsg:      "WELCOME_MARKER\r\n",
 		Password:        "secret",
 		MaxAuthAttempts: 2,
-		RootMode:        rootMode,
 	}
 	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
 	srv := NewTelnetServerWithContext(config, ctx)
@@ -513,7 +507,6 @@ func TestServer_IdleTimeoutReapsSession(t *testing.T) {
 		Port:        0,
 		WelcomeMsg:  "WELCOME_MARKER\r\n",
 		IdleTimeout: 300 * time.Millisecond,
-		RootMode:    rootMode,
 	}
 	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
 	srv := NewTelnetServerWithContext(config, ctx)

@@ -52,7 +52,6 @@ func newIntegrationTest(t *testing.T) *integrationTest {
 		WelcomeMsg: "WELCOME_MARKER\r\n",
 		MaxHistory: 10,
 		PageSize:   24,
-		RootMode:   rootMode,
 	}
 
 	ctx := &mode.CommandContext{
@@ -163,7 +162,6 @@ func TestIntegration_CmdLineToServerCommunication(t *testing.T) {
 		WelcomeMsg: "INTEGRATION_TEST\r\n",
 		MaxHistory: 10,
 		PageSize:   0,
-		RootMode:   rootMode,
 	}
 
 	ctx := &mode.CommandContext{
@@ -441,7 +439,6 @@ func TestIntegration_DataFlow_ParameterValidation(t *testing.T) {
 		WelcomeMsg: "",
 		MaxHistory: 10,
 		PageSize:   0,
-		RootMode:   rootMode,
 	}
 	ctx := &mode.CommandContext{CurrentMode: rootMode, CommandTree: rootMode.CommandTree}
 	srv := server.NewTelnetServerWithContext(config, ctx)
@@ -544,7 +541,6 @@ func TestIntegration_Exception_InvalidCommand(t *testing.T) {
 		WelcomeMsg: "",
 		MaxHistory: 10,
 		PageSize:   0,
-		RootMode:   rootMode,
 	}
 
 	ctx := &mode.CommandContext{
@@ -782,7 +778,6 @@ func TestIntegration_BusinessFlow_CompleteCLIWorkflow(t *testing.T) {
 		WelcomeMsg: "Router CLI v1.0\r\n",
 		MaxHistory: 50,
 		PageSize:   0,
-		RootMode:   rootMode,
 	}
 
 	ctx := &mode.CommandContext{CurrentMode: rootMode}
@@ -943,7 +938,6 @@ func TestIntegration_Compatibility_DifferentPageSizes(t *testing.T) {
 				WelcomeMsg: "",
 				MaxHistory: 10,
 				PageSize:   tc.pageSize,
-				RootMode:   rootMode,
 			}
 			ctx := &mode.CommandContext{CurrentMode: rootMode}
 			srv := server.NewTelnetServerWithContext(config, ctx)
@@ -1019,7 +1013,6 @@ func TestIntegration_Compatibility_VariousPromptFormats(t *testing.T) {
 				WelcomeMsg: "",
 				MaxHistory: 10,
 				PageSize:   0,
-				RootMode:   rootMode,
 			}
 			ctx := &mode.CommandContext{CurrentMode: rootMode}
 			srv := server.NewTelnetServerWithContext(config, ctx)
@@ -1093,7 +1086,6 @@ func TestIntegration_Compatibility_DifferentMaxHistory(t *testing.T) {
 				WelcomeMsg: "",
 				MaxHistory: maxHistory,
 				PageSize:   0,
-				RootMode:   rootMode,
 			}
 			ctx := &mode.CommandContext{CurrentMode: rootMode}
 			srv := server.NewTelnetServerWithContext(config, ctx)
@@ -1152,7 +1144,6 @@ func TestIntegration_Performance_MultipleConcurrentConnections(t *testing.T) {
 		WelcomeMsg: "",
 		MaxHistory: 10,
 		PageSize:   0,
-		RootMode:   rootMode,
 	}
 
 	ctx := &mode.CommandContext{CurrentMode: rootMode}
@@ -1228,7 +1219,6 @@ func TestIntegration_Performance_CommandResponseTime(t *testing.T) {
 		WelcomeMsg: "",
 		MaxHistory: 10,
 		PageSize:   0,
-		RootMode:   rootMode,
 	}
 
 	ctx := &mode.CommandContext{CurrentMode: rootMode}
@@ -1308,7 +1298,6 @@ func TestIntegration_Security_CommandInjectionPrevention(t *testing.T) {
 		WelcomeMsg: "",
 		MaxHistory: 10,
 		PageSize:   0,
-		RootMode:   rootMode,
 	}
 
 	ctx := &mode.CommandContext{
@@ -1427,7 +1416,6 @@ func TestIntegration_Security_SessionIsolation(t *testing.T) {
 		WelcomeMsg: "",
 		MaxHistory: 5,
 		PageSize:   0,
-		RootMode:   rootMode,
 	}
 	ctx := &mode.CommandContext{CurrentMode: rootMode}
 	srv := server.NewTelnetServerWithContext(config, ctx)
@@ -1544,7 +1532,6 @@ func TestIntegration_Regression_GracefulShutdown(t *testing.T) {
 		WelcomeMsg: "",
 		MaxHistory: 10,
 		PageSize:   0,
-		RootMode:   rootMode,
 	}
 
 	ctx := &mode.CommandContext{CurrentMode: rootMode}

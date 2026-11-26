@@ -28,6 +28,9 @@ func main() {
 	//config.Password = "secret"
 	//config.MaxAuthAttempts = 3 // 密码错误次数上限，0 使用内置默认值 3
 
+	// 命令审计日志示例（默认 false = 关闭；也可经 SetConfig("auditlog", "true") 设置）
+	config.AuditLog = true
+
 	// 支持通过环境变量 TNLCMD_PORT 覆盖端口，便于多实例并行测试
 	if p := os.Getenv("TNLCMD_PORT"); p != "" {
 		if port, err := strconv.Atoi(p); err == nil {

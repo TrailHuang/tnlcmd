@@ -87,5 +87,9 @@ func DefaultConfig() *Config {
 		IdleTimeout:     0,
 		Password:        "",
 		MaxAuthAttempts: 0,
+
+		// AuditLog 命令审计日志，默认关闭；需要时置 true，
+		// 每条命令执行与认证失败事件将经 slog 输出结构化审计记录。
+		AuditLog: false,
 	}
 }

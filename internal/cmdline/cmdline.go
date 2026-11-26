@@ -49,9 +49,6 @@ func NewCmdLine(config *Config) *CmdLine {
 	// 创建根模式
 	rootMode := mode.NewCommandMode("root", config.Prompt, "privileged EXEC mode")
 
-	// 设置配置的根模式
-	config.RootMode = rootMode
-
 	// 创建命令树
 	commandTree := commandtree.NewCommandTree()
 
@@ -221,6 +218,13 @@ func (c *CmdLine) SetConfig(key, value string) error {
 			return fmt.Errorf("invalid maxauthattempts value %q: must be a non-negative integer", value)
 		}
 		c.config.MaxAuthAttempts = v
+	case "auditlog":
+		// 仅接受 "true"/"false"（strconv.ParseBool 兼容 "1"/"0"/"t"/"f" 等）
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid auditlog value %q: must be a boolean (true/false)", value)
+		}
+		c.config.AuditLog = v
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}

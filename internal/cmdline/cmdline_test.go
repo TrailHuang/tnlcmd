@@ -171,3 +171,27 @@ func TestSetConfig_AuthKeys(t *testing.T) {
 		t.Error("SetConfig(maxauthattempts, abc) should fail")
 	}
 }
+
+// TestSetConfig_AuditLogKey 验证 auditlog 开关的设置与非法值拒绝。
+func TestSetConfig_AuditLogKey(t *testing.T) {
+	c := NewCmdLine(nil)
+
+	if err := c.SetConfig("auditlog", "true"); err != nil {
+		t.Fatalf("SetConfig(auditlog) failed: %v", err)
+	}
+	if !c.config.AuditLog {
+		t.Error("AuditLog = false, want true")
+	}
+
+	if err := c.SetConfig("auditlog", "false"); err != nil {
+		t.Fatalf("SetConfig(auditlog, false) failed: %v", err)
+	}
+	if c.config.AuditLog {
+		t.Error("AuditLog = true, want false")
+	}
+
+	// 非布尔值必须被拒绝
+	if err := c.SetConfig("auditlog", "yes"); err == nil {
+		t.Error("SetConfig(auditlog, yes) should fail")
+	}
+}

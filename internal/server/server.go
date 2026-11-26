@@ -133,24 +133,16 @@ func (ts *TelnetServer) handleConnection(conn net.Conn) {
 			"local", conn.LocalAddr().String())
 	}
 
-	// 使用服务器中的上下文（如果可用）
-	var context *mode.CommandContext
-	if ts.context != nil {
-		// 每个连接使用独立的上下文副本，避免会话间共享可变状态
-		context = ts.context.Clone()
-	} else {
-		// 向后兼容：从 RootMode 创建新的上下文（使用安全类型断言）
-		rootMode, ok := ts.config.RootMode.(*mode.CommandMode)
-		if !ok || rootMode == nil {
-			slog.Warn("invalid RootMode type, closing connection", "type", fmt.Sprintf("%T", ts.config.RootMode))
-			conn.Close()
-			return
-		}
-		context = &mode.CommandContext{
-			CurrentMode: rootMode,
-			Path:        []string{},
-		}
+	// 命令上下文由构造方（cmdline/测试）显式传入；缺失说明初始化不完整，
+	// 直接拒绝连接而非降级猜测根模式
+	if ts.context == nil {
+		slog.Warn("no command context available, closing connection")
+		conn.Close()
+		return
 	}
+
+	// 每个连接使用独立的上下文副本，避免会话间共享可变状态
+	context := ts.context.Clone()
 
 	// 创建会话
 	session := session.NewSessionWithContext(conn, ts.config, context)

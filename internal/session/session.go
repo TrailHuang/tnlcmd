@@ -164,7 +164,11 @@ func (s *Session) Handle(ctx context.Context) error {
 		}
 
 		s.history.Add(line)
+		start := time.Now()
 		err = s.processCommand(ctx, line)
+		if s.config.AuditLog {
+			s.auditCommand(line, time.Since(start), err)
+		}
 		if debuglog.Enabled() {
 			errStr := ""
 			if err != nil {
@@ -333,6 +337,13 @@ func (s *Session) authenticate(ctx context.Context) bool {
 			"remote", s.remoteStr(),
 			"attempt", attempt,
 			"max_attempts", maxAttempts)
+		if s.config.AuditLog {
+			slog.Info("audit",
+				"remote", s.remoteStr(),
+				"event", "auth_failed",
+				"attempt", attempt,
+				"max_attempts", maxAttempts)
+		}
 		s.writerWrite(authFailedMsg)
 		s.flushWriter()
 	}
@@ -342,6 +353,13 @@ func (s *Session) authenticate(ctx context.Context) bool {
 	slog.Info("connection closed: too many failed authentication attempts",
 		"remote", s.remoteStr(),
 		"attempts", maxAttempts)
+	if s.config.AuditLog {
+		slog.Info("audit",
+			"remote", s.remoteStr(),
+			"event", "auth_exhausted",
+			"attempts", maxAttempts,
+			"result", "disconnect")
+	}
 	return false
 }
 
@@ -714,6 +732,20 @@ func (s *Session) readLine() (string, error) {
 			}
 		}
 	}
+}
+
+// auditCommand 输出命令审计记录：远端地址、命令原文、耗时与结果。
+// err 为 nil 时 result=ok，否则记录错误信息。
+func (s *Session) auditCommand(command string, elapsed time.Duration, err error) {
+	result := "ok"
+	if err != nil {
+		result = err.Error()
+	}
+	slog.Info("audit",
+		"remote", s.remoteStr(),
+		"command", command,
+		"duration_ms", elapsed.Milliseconds(),
+		"result", result)
 }
 
 // processCommand 处理命令

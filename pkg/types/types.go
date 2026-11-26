@@ -64,8 +64,7 @@ type Config struct {
 	Port       int
 	WelcomeMsg string
 	MaxHistory int
-	PageSize   int         // 分页大小（行数）；<=0 表示禁用分页，一次性输出全部内容
-	RootMode   interface{} // 使用 interface{} 避免循环导入
+	PageSize   int // 分页大小（行数）；<=0 表示禁用分页，一次性输出全部内容
 
 	// MaxConnections 最大并发连接数上限；0（默认）表示不限制。
 	// 超限时新连接收到拒绝提示后立即关闭。
@@ -83,4 +82,9 @@ type Config struct {
 	// MaxAuthAttempts 密码错误次数上限，超过后断开连接；
 	// 0 或负数（默认）使用内置默认值 3。
 	MaxAuthAttempts int
+
+	// AuditLog 命令审计日志开关；false（默认）表示关闭，行为与未开启时一致。
+	// 开启后每条命令执行完成时经 slog（Info 级）输出结构化审计记录：
+	// 远端地址、命令原文、耗时、成败；密码认证失败事件同样纳入审计。
+	AuditLog bool
 }

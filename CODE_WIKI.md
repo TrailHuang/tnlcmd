@@ -136,7 +136,7 @@ tnlcmd/
 - `CommandHandler func(args []string) string` — 命令处理函数签名
 - `CommandInfo` — 命令元信息（Name / Description / Handler）
 - `CommandNodeType` — 节点类型枚举（Command / Optional / Enum / Num / String / ModeSwitch / Exit）
-- `Config` — 服务配置（Prompt / Port / WelcomeMsg / MaxHistory / PageSize / RootMode / logger）
+- `Config` — 服务配置（Prompt / Port / WelcomeMsg / MaxHistory / PageSize / MaxConnections / IdleTimeout / Password / MaxAuthAttempts / logger）
 - **Sentinel 常量**：`SentinelExit = "__EXIT__"`、`SentinelExitToRoot = "__EXIT_TO_ROOT__"`，用于 handler 向 session 层传达「关闭连接」或「退回根模式」的意图。
 
 ### 4.3 `internal/cmdline` — 编排层
@@ -290,7 +290,6 @@ type Config struct {
     Prompt, WelcomeMsg string
     Port, MaxHistory   int
     PageSize           int           // <=0 禁用分页
-    RootMode           interface{}   // 内部为 *mode.CommandMode
     logger             *slog.Logger
 }
 ```
@@ -389,7 +388,7 @@ pkg/types
    └──> log/slog (仅用于 Config.logger)
 ```
 
-依赖方向严格遵循「外观 → 编排 → 子系统 → 公共类型」，无循环依赖。`pkg/types.RootMode` 使用 `interface{}` 是为打破 `types → mode` 的潜在循环。
+依赖方向严格遵循「外观 → 编排 → 子系统 → 公共类型」，无循环依赖。原 `pkg/types.RootMode interface{}`（为打破 `types → mode` 潜在循环而设）已于工单 01 删除：根模式改由 `CmdLine.rootMode` 内部持有并经 `CommandContext` 显式传递。
 
 ### 6.2 标准库使用
 

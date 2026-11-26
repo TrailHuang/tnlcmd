@@ -3,8 +3,10 @@ package session
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -35,6 +37,13 @@ func newPipeTest(t *testing.T, pageSize int, rootMode *mode.CommandMode) *pipeTe
 // newPipeTestWithHistory 与 newPipeTest 相同，但可指定历史容量上限。
 func newPipeTestWithHistory(t *testing.T, pageSize, maxHistory int, rootMode *mode.CommandMode) *pipeTest {
 	t.Helper()
+	return newPipeTestWithConfig(t, pageSize, maxHistory, rootMode, nil)
+}
+
+// newPipeTestWithConfig 在 newPipeTestWithHistory 基础上允许定制 Config
+// （回调在会话创建前执行），供审计等开关类测试使用。
+func newPipeTestWithConfig(t *testing.T, pageSize, maxHistory int, rootMode *mode.CommandMode, customize func(*types.Config)) *pipeTest {
+	t.Helper()
 	clientConn, serverConn := net.Pipe()
 
 	config := &types.Config{
@@ -43,7 +52,9 @@ func newPipeTestWithHistory(t *testing.T, pageSize, maxHistory int, rootMode *mo
 		WelcomeMsg: "",
 		MaxHistory: maxHistory,
 		PageSize:   pageSize,
-		RootMode:   rootMode,
+	}
+	if customize != nil {
+		customize(config)
 	}
 	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
 	sess := NewSessionWithContext(serverConn, config, ctx)
@@ -101,6 +112,112 @@ func (pt *pipeTest) close() {
 	case <-pt.done:
 	case <-time.After(3 * time.Second):
 	}
+}
+
+// TestSession_AuditLogOnOff 验证审计开关：开启后每条命令输出含 remote/command/
+// duration_ms/result 的结构化审计记录；关闭时无 audit 输出（工单 02）。
+func TestSession_AuditLogOnOff(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	rootMode.AddCommand("echo", "Echo", func(args []string) string {
+		return "RESULT\r\n"
+	})
+
+	for _, tc := range []struct {
+		name      string
+		auditOn   bool
+		wantAudit bool
+	}{
+		{name: "on", auditOn: true, wantAudit: true},
+		{name: "off", auditOn: false, wantAudit: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// 重定向 slog 默认 logger 捕获审计输出
+			var logBuf safeLogBuffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+			defer slog.SetDefault(prev)
+
+			pt := newPipeTestWithConfig(t, 0, 10, rootMode, func(cfg *types.Config) {
+				cfg.AuditLog = tc.auditOn
+			})
+
+			if err := pt.write("echo\r\n"); err != nil {
+				t.Fatalf("write echo failed: %v", err)
+			}
+			if _, err := pt.readUntil("RESULT", 3*time.Second); err != nil {
+				t.Fatalf("read result failed: %v", err)
+			}
+			// Handler 内 slog 输出与回显并行发生，稍作等待确保审计落盘
+			time.Sleep(50 * time.Millisecond)
+			pt.close()
+
+			logs := logBuf.String()
+			if !tc.wantAudit {
+				if strings.Contains(logs, "audit") {
+					t.Errorf("audit disabled but got audit log: %s", logs)
+				}
+				return
+			}
+			for _, key := range []string{"audit", "command=echo", "duration_ms=", "result=ok"} {
+				if !strings.Contains(logs, key) {
+					t.Errorf("audit log missing %q, got: %s", key, logs)
+				}
+			}
+		})
+	}
+}
+
+// TestSession_AuditLogOnCommandError 验证 auditCommand 在命令出错时仍输出审计，
+// result 记录错误信息而非 ok（工单 02）。
+// 说明：processCommand 的参数验证错误分支经公开输入不可达（findCommand 对
+// 参数不匹配直接返回 ErrUnknownCommand 且最终输出后返回 nil），故此处白盒直测。
+func TestSession_AuditLogOnCommandError(t *testing.T) {
+	var logBuf safeLogBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	defer slog.SetDefault(prev)
+
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	pt := newPipeTestWithConfig(t, 0, 10, rootMode, func(cfg *types.Config) {
+		cfg.AuditLog = true
+	})
+	defer pt.close()
+
+	s := pt.sess
+	s.mu.RLock()
+	s.auditCommand("set threshold 99", 12*time.Millisecond, errors.New("invalid parameter value"))
+	s.mu.RUnlock()
+	time.Sleep(50 * time.Millisecond)
+
+	logs := logBuf.String()
+	if !strings.Contains(logs, "audit") {
+		t.Fatalf("expected audit log for failed command, got: %s", logs)
+	}
+	// slog TextHandler 对含空格值输出带引号：result="invalid parameter value"
+	if !strings.Contains(logs, `result="invalid parameter value"`) {
+		t.Errorf("audit log should record error result, got: %s", logs)
+	}
+	if strings.Contains(logs, "result=ok") {
+		t.Errorf("failed command should not audit result=ok, got: %s", logs)
+	}
+}
+
+// safeLogBuffer 并发安全的日志缓冲（slog 输出与测试主线程并行写入）。
+type safeLogBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *safeLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // TestSession_BasicCommand 验证注册的命令能被正确执行并返回结果。
@@ -705,7 +822,6 @@ func newScriptedSession(input string) (*Session, *scriptedConn) {
 	config := &types.Config{
 		Prompt:     "P>",
 		MaxHistory: 10,
-		RootMode:   rootMode,
 	}
 	conn := &scriptedConn{data: []byte(input)}
 	sess := NewSessionWithContext(conn, config, &mode.CommandContext{CurrentMode: rootMode})

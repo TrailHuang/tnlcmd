@@ -48,7 +48,7 @@
 | **TCP Server** | `internal/server/server.go` | 206 | TCP 监听、连接接受、会话创建、每连接独立上下文克隆、优雅关闭（WaitGroup） |
 | **Session** | `internal/session/session.go` | 909 | 逐字节终端 I/O、输入状态机（Telnet/ANSI/UTF-8）、命令分发、参数验证、分页输出 |
 | **Command Tree** | `internal/commandtree/command_tree.go` | 897 | Trie 命令存储、参数解析、命令匹配（含唯一前缀匹配）、参数验证 |
-| **Completer** | `internal/completer/completer.go` | 375 | Tab 补全、`?` 帮助、参数建议、最长公共前缀压缩 |
+| **Completer** | `internal/completer/completer.go` | 277 | Tab 补全、`?` 帮助、参数建议、最长公共前缀压缩 |
 | **History** | `internal/history/history.go` | 123 | 容量受限的历史记录（环形缓冲实现）、上下键导航 |
 | **Mode** | `internal/mode/mode.go` | 157 | 视图层级、模式切换、`CommandContext` 及其克隆 |
 | **debuglog** | `internal/debuglog/debuglog.go` | 105 | 环境变量控制的调试日志（默认关闭，零开销） |
@@ -185,7 +185,6 @@ type Config struct {
     MaxHistory int          // 历史记录上限（<=0 禁用）
     PageSize   int          // 分页大小（行数）；<=0 禁用分页
     logger     *slog.Logger // 私有字段，经 SetLogger 设置（当前无内部调用方）
-    RootMode   interface{}  // 内部使用（见 §6.1 M3）
 }
 
 func NewCmdLine(config *Config) *CmdLine                 // config 为 nil 时使用内置默认值
@@ -255,7 +254,7 @@ telnet localhost 2323
 | 旧编号 | 问题 | 现状 |
 |--------|------|------|
 | C1 | 全局 `ModeCommands` | ✅ 已移入 `CommandTree` 实例字段 |
-| C2 | `RootMode` 类型断言无保护 | ✅ `server.go`/`session.go` 均为安全断言 + 兜底 |
+| C2 | `RootMode` 类型断言无保护 | ✅ 已彻底移除：`Config.RootMode` 字段删除（M3），根模式经 `CmdLine.rootMode`/`CommandContext` 显式传递，无类型断言 |
 | C3 | Session 共享上下文 | ✅ 每连接 `ts.context.Clone()`（但见新 S2） |
 | C4 | readLine 重复创建 bufio.Reader | ✅ Session 持有并复用 reader/writer |
 | m1 | `fmt.Printf` 调试日志残留 | ✅ 统一为 `slog` + `debuglog` |
@@ -283,7 +282,7 @@ telnet localhost 2323
 |---|------|------|------|
 | M1 | **参数元数据双口径**：`isValidNumberInRange` 优先用 `RangeMin/RangeMax` 结构体字段，而 `GetNumberValidationError`/`GetEnumValidationError`/`GetEnumCompletions` 仍从 `Name` 正则重新提取；枚举节点 `Name` 保留 `(on|off)` 原文而 Optional 节点被 trim，提取口径不一 | `command_tree.go:737-897` | 验证与错误信息统一基于结构体字段 |
 | M2 | **错误契约仍为字符串匹配**：`processCommand` 用 `strings.Contains(err.Error(), "incomplete command")` 判断分支，`FindCommand` 错误未导出 sentinel | `session.go:520`, `command_tree.go:367,432` | 定义 `ErrIncompleteCommand` 等 sentinel error |
-| M3 | **`Config.RootMode` 仍为 `interface{}`** | `types.go:46` | 收敛为内部类型或移除 |
+| M3 | ✅ **`Config.RootMode` 仍为 `interface{}`**（已修复 2026-11-26，工单 01） | `types.go:46` | 已删除该字段：根模式在 `NewCmdLine` 内部构造，经 `CmdLine.rootMode` → `CommandContext` → `server.context` 显式传递；server 兜底分支（类型断言）删除，context 缺失时拒绝连接 |
 | M4 | **补全器存在未使用入口与重复逻辑**：`Complete` 与 `GetCompletions` 仅 `includeModeSwitch` 参数不同且生产路径均未调用；生产只使用 `GetNextLevelCompletions`/`GetParameterCompletions`/`GetCommandTreeSuggestions` | `completer.go:122-199,236-253` | 删除或合并死入口 |
 | M5 | ✅ **模式切换双路径**（已修复）：`GetAvailableCommands` 生成的 `createModeChangeHandler`（闭包直接 `ChangeMode`）与 `processCommand` 的 ModeSwitch 树节点分支重复实现切换语义 | `mode.go`, `session.go` | 已收敛为 `CommandContext.EnterMode` 单一实现（ChangeMode + 标准提示消息），两条路径均委托 |
 | M6 | **`SetConfig` 运行期语义不完整**：`port` 修改对已监听服务无效；`prompt` 仅更新 `rootMode`，其他模式及活动会话提示符不刷新（`UpdateAllSessionsPrompt` 未被接线） | `cmdline.go:133-166` | 文档化限制或补全联动 |
@@ -334,9 +333,11 @@ telnet localhost 2323
 
 ### P3 — 长期演进
 
-14. **协议扩展**：SSH（`golang.org/x/crypto/ssh`）、WebSocket CLI
-15. **可观测性**：Prometheus 指标（连接数、命令延迟）、命令审计日志
-16. **`Config.RootMode` 去接口化**（M3）
+> 工单拆分见 `.scratch/p3-long-term/issues/`（本地 markdown tracker）。SSH / WebSocket 经用户确认本批剔除，保持待办。
+
+14. **协议扩展**：SSH（`golang.org/x/crypto/ssh`）、WebSocket CLI — 本批剔除（用户确认 2026-11-26）
+15. **可观测性**：Prometheus 指标（连接数、命令延迟）、命令审计日志 — 工单拆分：02 命令审计日志（✅ 已完成 2026-11-26：`Config.AuditLog` 默认关闭，slog 结构化输出 remote/command/duration_ms/result，认证失败事件纳入审计，SetConfig 接入 `auditlog` key）、03 Prometheus 指标（用户确认引入 client_golang，独立 registry 不写 DefaultRegisterer）
+16. **`Config.RootMode` 去接口化**（M3）— ✅ 已完成（2026-11-26，工单 01）：公开字段删除，根模式经 `CmdLine.rootMode` → `CommandContext` → `server.context` 显式传递；server 的 `interface{}` 类型断言兜底分支删除（context 缺失直接拒绝连接并告警）；约 22 处测试构造点迁移，`go test -race ./...` 全绿
 
 ---
 
