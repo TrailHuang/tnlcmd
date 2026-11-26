@@ -162,34 +162,16 @@ func setupCompleterWithModes() *CommandCompleter {
 func TestGetCommandTreeSuggestions_ModeSwitch(t *testing.T) {
 	c := setupCompleterWithModes()
 
-	// When typing "interface" and pressing ?, should show interface sub-commands
+	// 输入完整视图名 + ?：应提示 <cr>（可直接回车切换视图），而非展开目标视图子命令
 	suggestions := c.GetCommandTreeSuggestions("interface")
-	if len(suggestions) < 2 {
-		t.Errorf("GetCommandTreeSuggestions('interface') should show sub-commands, got %d: %v", len(suggestions), suggestions)
+	if len(suggestions) != 1 || suggestions[0] != "<cr>" {
+		t.Errorf("GetCommandTreeSuggestions('interface') = %v, want [<cr>]", suggestions)
 	}
 
-	// Should contain interface-specific commands
-	hasIP := false
-	hasShutdown := false
-	for _, s := range suggestions {
-		if strings.Contains(s, "ip") || strings.Contains(s, "IPADDR") {
-			hasIP = true
-		}
-		if strings.Contains(s, "shutdown") {
-			hasShutdown = true
-		}
-	}
-	if !hasIP {
-		t.Error("suggestions for 'interface' should include ip command")
-	}
-	if !hasShutdown {
-		t.Error("suggestions for 'interface' should include shutdown command")
-	}
-
-	// Similarly for configure mode
+	// configure 视图同理
 	suggestions = c.GetCommandTreeSuggestions("configure")
-	if len(suggestions) < 2 {
-		t.Errorf("GetCommandTreeSuggestions('configure') should show sub-commands, got %d: %v", len(suggestions), suggestions)
+	if len(suggestions) != 1 || suggestions[0] != "<cr>" {
+		t.Errorf("GetCommandTreeSuggestions('configure') = %v, want [<cr>]", suggestions)
 	}
 }
 

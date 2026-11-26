@@ -288,7 +288,7 @@ func descriptionHandler(args []string) string {
 	if len(args) == 0 {
 		return "Usage: description <text>\r\n"
 	}
-	return "Description set\r\n"
+	return fmt.Sprintf("Description set %s\r\n", args[0])
 }
 
 func shutdownHandler(args []string) string {

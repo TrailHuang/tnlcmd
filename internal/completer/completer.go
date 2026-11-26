@@ -207,6 +207,10 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 		}
 		// 最后一个关键字精确命中命令/模式节点 → 下钻显示其下一级
 		if child, ok := node.Children[lastPart]; ok {
+			// 视图切换命令：输入完整视图名即可回车执行切换，提示 <cr> 而非展开目标视图子命令
+			if child.Type == types.NodeTypeModeSwitch {
+				return []string{"<cr>"}
+			}
 			return c.describeChildrenWithCR(child)
 		}
 		// 最后一个关键字是已输入的参数值 → 导航到该参数节点，显示其下一级候选
