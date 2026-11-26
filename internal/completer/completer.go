@@ -11,20 +11,7 @@ import (
 
 // CommandCompleter 命令补全器
 type CommandCompleter struct {
-	commandTree *commandtree.CommandTree // 树形命令存储（向后兼容）
-	context     *mode.CommandContext     // 命令上下文，用于访问当前视图的独立命令树
-}
-
-// NewCommandCompleter 创建新的命令补全器
-func NewCommandCompleter() *CommandCompleter {
-	return &CommandCompleter{}
-}
-
-// NewCommandCompleterWithTree 创建带命令树的补全器
-func NewCommandCompleterWithTree(tree *commandtree.CommandTree) *CommandCompleter {
-	return &CommandCompleter{
-		commandTree: tree,
-	}
+	context *mode.CommandContext // 命令上下文，用于访问当前视图的独立命令树
 }
 
 // NewCommandCompleterWithContext 使用上下文创建新的命令补全器
@@ -37,11 +24,6 @@ func NewCommandCompleterWithContext(context *mode.CommandContext) *CommandComple
 // UpdateContext 更新命令上下文
 func (c *CommandCompleter) UpdateContext(context *mode.CommandContext) {
 	c.context = context
-}
-
-// UpdateCommandTree 更新命令树
-func (c *CommandCompleter) UpdateCommandTree(tree *commandtree.CommandTree) {
-	c.commandTree = tree
 }
 
 // resolveChildren 解析节点的子命令：如果是 ModeSwitch 节点，返回目标模式的命令树子节点
@@ -78,34 +60,6 @@ func (c *CommandCompleter) resolveNodeForInput(input string) (*commandtree.Comma
 	return node, inputParts, lastPart
 }
 
-// collectCommandCompletions 收集节点下名称以 lastPart 为前缀的命令类节点。
-// includeModeSwitch 控制是否纳入视图切换节点；lastPart 为空时返回全部符合条件的命令。
-func (c *CommandCompleter) collectCommandCompletions(node *commandtree.CommandNode, lastPart string, includeModeSwitch bool) []string {
-	var matches []string
-	for name, child := range node.Children {
-		if (child.Type == types.NodeTypeCommand || (includeModeSwitch && child.Type == types.NodeTypeModeSwitch)) && strings.HasPrefix(name, lastPart) {
-			matches = append(matches, name)
-		}
-	}
-	return matches
-}
-
-// applyCommonPrefix 对候选项应用最长公共前缀压缩：
-// 唯一候选直接返回；多个候选若存在比当前输入更长的公共前缀则只返回该前缀，否则返回全部候选。
-func applyCommonPrefix(matches []string, currentInput string) []string {
-	if len(matches) == 1 {
-		return matches
-	}
-	if len(matches) > 1 {
-		lcp := findLongestCommonPrefix(matches)
-		if lcp != "" && lcp != currentInput {
-			return []string{lcp}
-		}
-		return matches
-	}
-	return nil
-}
-
 // buildFullCommand 将唯一匹配的命令拼接到已输入路径上，形成完整命令字符串。
 func buildFullCommand(inputParts []string, match string) []string {
 	if len(inputParts) == 0 {
@@ -116,20 +70,6 @@ func buildFullCommand(inputParts []string, match string) []string {
 		return []string{strings.Join(baseParts, " ") + " " + match}
 	}
 	return []string{match}
-}
-
-// Complete 命令补全
-func (c *CommandCompleter) Complete(input string) []string {
-	node, inputParts, currentInput := c.resolveNodeForInput(input)
-	if node == nil {
-		return nil
-	}
-	matches := c.collectCommandCompletions(node, currentInput, true)
-	// 空输入时直接返回全部命令，不应用公共前缀压缩
-	if len(inputParts) == 0 {
-		return matches
-	}
-	return applyCommonPrefix(matches, currentInput)
 }
 
 // GetNextLevelCompletions 获取下一级补全选项（基于当前视图的命令树）
@@ -184,20 +124,6 @@ func (c *CommandCompleter) GetNextLevelCompletions(input string) []string {
 	return nil
 }
 
-// GetCompletions 获取补全选项（统一入口，基于当前视图的命令树）
-func (c *CommandCompleter) GetCompletions(input string) []string {
-	node, inputParts, currentInput := c.resolveNodeForInput(input)
-	if node == nil {
-		return nil
-	}
-	matches := c.collectCommandCompletions(node, currentInput, false)
-	// 空输入时直接返回全部命令，不应用公共前缀压缩
-	if len(inputParts) == 0 {
-		return matches
-	}
-	return applyCommonPrefix(matches, currentInput)
-}
-
 // GetParameterCompletions 获取参数补全选项（基于当前视图的命令树）
 func (c *CommandCompleter) GetParameterCompletions(input string) []string {
 	var completions []string
@@ -230,26 +156,6 @@ func (c *CommandCompleter) GetParameterCompletions(input string) []string {
 	}
 
 	return completions
-}
-
-// GetCurrentViewCommands 获取当前视图的命令列表（包括内置命令）
-func (c *CommandCompleter) GetCurrentViewCommands() []string {
-	var commands []string
-
-	// 使用当前视图的可用命令
-	if c.context != nil && c.context.CurrentMode != nil {
-		availableCommands := c.context.GetAvailableCommands()
-		for name := range availableCommands {
-			// 只显示按空格分割的第一段
-			parts := strings.Fields(name)
-			if len(parts) == 0 {
-				continue
-			}
-			commands = append(commands, parts[0])
-		}
-	}
-
-	return commands
 }
 
 // describeChildren 生成节点下一级候选的显示文本（名称定宽 + 描述）。
@@ -355,21 +261,4 @@ func (c *CommandCompleter) describeChildrenWithCR(node *commandtree.CommandNode)
 		}
 	}
 	return out
-}
-
-// findLongestCommonPrefix 找到字符串切片中最长的公共前缀
-func findLongestCommonPrefix(strs []string) string {
-	if len(strs) == 0 {
-		return ""
-	}
-	lcp := strs[0]
-	for _, s := range strs[1:] {
-		for !strings.HasPrefix(s, lcp) {
-			lcp = lcp[:len(lcp)-1]
-			if lcp == "" {
-				return ""
-			}
-		}
-	}
-	return lcp
 }

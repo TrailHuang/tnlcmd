@@ -314,10 +314,12 @@ telnet localhost 2323
 
 ### P1 — 短期改进
 
-4. **统一参数元数据口径**（M1）：验证与错误信息全部基于 `RangeMin/RangeMax/EnumValues/EnumRanges` 字段
-5. **sentinel error**（M2）：`ErrIncompleteCommand` / `ErrUnknownCommand` 替代字符串匹配
-6. **Handler 传 ctx + Stop 超时**（M8）：`CommandHandler` 演进为 `func(ctx context.Context, args []string) string`
-7. **清理死代码**（m1/m4/m5）：删除无调用方 API 或标注 `Deprecated`
+> ✅ 4-7 已全部完成（2026-11-26）并通过 `go vet ./...` 与 `go test -race ./...` 全量验证：
+> 4. **统一参数元数据口径**（M1）：`GetNumberValidationError`/`GetEnumValidationError`/`GetEnumCompletions`/`isValidEnumValue` 全部基于 `RangeMin/RangeMax/EnumValues/EnumRanges` 结构体字段，删除 `extractNumberRange` 与 `numberRangeRegexp`；
+> 5. **sentinel error**（M2）：新增 `types.ErrIncompleteCommand`/`types.ErrUnknownCommand`（`fmt.Errorf("%w: ...")` 包装），`session.processCommand` 改用 `errors.Is` 判断；
+> 6. **Handler ctx 支持 + Stop 超时**（M8）：采用兼容方案——公共 `CommandHandler` 保持旧签名 `func(args []string) string` 不变（外部代码无需迁移）；新增 `types.ContextHandler`（`func(ctx context.Context, args []string) string`）与 `types.Adapt` 适配器，命令树内部统一以 ContextHandler 存储（`AddCommand` 注册时自动包装），`session.processCommand(ctx, line)` 将会话 ctx 透传给 handler；`server.Stop` 以 5s 超时兜底等待会话退出（慢 Handler 无法中断时记 Warn 放弃等待），`cmdline.Stop` 改为锁外等待；新增 `RegisterContextCommand` 公共 API 支持直接注册 ContextHandler（旧签名经 `AddCommand` 自动 Adapt）；
+> 7. **清理死代码**（m1/m4/m5）：删除 `NewTelnetServer/NewSession/NewCommandCompleter/NewCommandCompleterWithTree/UpdateCommandTree`、`Complete/GetCompletions/GetCurrentViewCommands` 及仅被其使用的 `applyCommonPrefix/findLongestCommonPrefix/collectCommandCompletions`、`Session.commands`/`TelnetServer.commands`/`TelnetServer.commandTree` 字段、`Session.IsStale`、`Config.SetLogger/Logger`/`logger` 字段、`NodeTypeExit`、`minInt`（改用内置 `min`）。
+
 8. **补测试**（m6）：`cmdline` 编排层已有测试（P0 阶段新增）；补 `debuglog` 开关行为；修复集成测试 Name 误传
 
 ### P2 — 中期改进

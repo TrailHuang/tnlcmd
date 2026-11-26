@@ -3,19 +3,12 @@ package commandtree
 import (
 	"fmt"
 	"reflect"
-	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/TrailHuang/tnlcmd/pkg/types"
-)
-
-// 预编译正则表达式，避免每次调用重新编译
-var (
-	numberRangeRegexp = regexp.MustCompile(`[<\[](\d+)-(\d+)[>\]]`)
-	enumValuesRegexp  = regexp.MustCompile(`[\(\[](.*?)[\)\]]`)
 )
 
 // CommandNodeType 命令节点类型
@@ -35,7 +28,7 @@ type CommandNode struct {
 	Name        string
 	Type        CommandNodeType
 	Description string
-	Handler     types.CommandHandler
+	Handler     types.ContextHandler // 统一以 ctx 版签名存储，旧签名经 types.Adapt 包装
 	Children    map[string]*CommandNode
 	Parent      *CommandNode
 
@@ -99,8 +92,18 @@ func (t *CommandTree) GetModeCommandKeys() []string {
 	return keys
 }
 
-// AddCommand 添加命令到命令树
+// AddCommand 添加命令到命令树（旧签名 handler，经 Adapt 包装为 ContextHandler 存储）
 func (t *CommandTree) AddCommand(command string, description string, handler types.CommandHandler, detailedDescription ...string) error {
+	return t.addCommand(command, description, types.Adapt(handler), detailedDescription...)
+}
+
+// AddContextCommand 添加支持上下文的命令到命令树
+func (t *CommandTree) AddContextCommand(command string, description string, handler types.ContextHandler, detailedDescription ...string) error {
+	return t.addCommand(command, description, handler, detailedDescription...)
+}
+
+// addCommand 添加命令到命令树的公共实现
+func (t *CommandTree) addCommand(command string, description string, handler types.ContextHandler, detailedDescription ...string) error {
 	// 解析完整的命令字符串，包括参数
 	nodes, err := t.parseCommandString(command)
 	if err != nil {
@@ -364,7 +367,7 @@ func (n *CommandNode) findCommand(args []string, path []string, matchArgs []stri
 				return child.findCommand(args, path, matchArgs)
 			}
 		}
-		return nil, path, matchArgs, fmt.Errorf("incomplete command")
+		return nil, path, matchArgs, fmt.Errorf("%w: %s", types.ErrIncompleteCommand, strings.Join(path, " "))
 	}
 
 	currentArg := args[0]
@@ -429,7 +432,7 @@ func (n *CommandNode) findCommand(args []string, path []string, matchArgs []stri
 		return n, path, matchArgs, nil
 	}
 
-	return nil, path, matchArgs, fmt.Errorf("unknown command: %s", currentArg)
+	return nil, path, matchArgs, fmt.Errorf("%w: %s", types.ErrUnknownCommand, currentArg)
 }
 
 // GetCompletions 获取补全建议
@@ -618,7 +621,7 @@ func (t *CommandTree) printNode(node *CommandNode, prefix string, isLast bool, r
 }
 
 // getFunctionName 获取函数名称
-func getFunctionName(handler types.CommandHandler) string {
+func getFunctionName(handler types.ContextHandler) string {
 	if handler == nil {
 		return "nil"
 	}
@@ -702,12 +705,7 @@ func isValidNumberInRange(node *CommandNode, input string) bool {
 		return false
 	}
 
-	// 优先使用节点结构体中的范围字段
-	min, max := node.RangeMin, node.RangeMax
-	if min == 0 && max == 0 {
-		// 回退：从 Name 字符串解析（兼容直接构造的节点）
-		min, max = extractNumberRange(node.Name)
-	}
+	min, max := resolveNumberRange(node)
 
 	// 如果没有指定范围，接受任何有效数字
 	if min == 0 && max == 0 {
@@ -718,20 +716,10 @@ func isValidNumberInRange(node *CommandNode, input string) bool {
 	return num >= min && num <= max
 }
 
-// extractNumberRange 从描述中提取数字范围
-func extractNumberRange(Name string) (int, int) {
-	// 范围通常用尖括号或方括号括起来，如 <1-10> 或 [1-100]
-	matches := numberRangeRegexp.FindStringSubmatch(Name)
-	if len(matches) == 3 {
-		min, err1 := strconv.Atoi(matches[1])
-		max, err2 := strconv.Atoi(matches[2])
-		if err1 == nil && err2 == nil {
-			return min, max
-		}
-	}
-
-	// 如果没有找到范围，返回0表示无范围限制
-	return 0, 0
+// resolveNumberRange 返回数值参数的有效范围。
+// 统一基于节点结构体字段（RangeMin/RangeMax），二者均为 0 视为无范围限制。
+func resolveNumberRange(node *CommandNode) (int, int) {
+	return node.RangeMin, node.RangeMax
 }
 
 // GetNumberValidationError 获取数字参数验证错误信息
@@ -742,8 +730,7 @@ func GetNumberValidationError(node *CommandNode, input string) string {
 		return fmt.Sprintf("无效的数字格式: '%s'", input)
 	}
 
-	// 从节点描述中提取范围信息
-	min, max := extractNumberRange(node.Name)
+	min, max := resolveNumberRange(node)
 
 	// 如果没有指定范围，接受任何有效数字
 	if min == 0 && max == 0 {
@@ -769,11 +756,7 @@ func GetNumberValidationError(node *CommandNode, input string) string {
 // GetNumberCompletions 获取数字参数的补全选项
 func GetNumberCompletions(node *CommandNode, input string) []string {
 	// 数字参数通常不需要补全，但可以显示范围提示
-	// 优先使用节点结构体中的范围字段，回退到从 Name 解析
-	min, max := node.RangeMin, node.RangeMax
-	if min == 0 && max == 0 {
-		min, max = extractNumberRange(node.Name)
-	}
+	min, max := resolveNumberRange(node)
 	if min == 0 && max == 0 {
 		return nil
 	}
@@ -798,9 +781,8 @@ func isString(str string) bool {
 
 // isValidEnumValue 检查枚举参数值是否有效
 func isValidEnumValue(node *CommandNode, input string) bool {
-	// 从节点描述中提取枚举值
-	// 枚举参数格式如: (on|off|enable|disable)
-	enumValues := extractEnumValues(node.Name)
+	// 统一基于节点结构体字段 EnumValues / EnumRanges
+	enumValues := node.EnumValues
 	if len(enumValues) == 0 && len(node.EnumRanges) == 0 {
 		// 如果没有明确的枚举值定义，接受任何输入
 		return true
@@ -826,31 +808,11 @@ func isValidEnumValue(node *CommandNode, input string) bool {
 	return false
 }
 
-// extractEnumValues 从描述中提取枚举值
-func extractEnumValues(description string) []string {
-	// 枚举值通常用括号括起来，如 (on|off) 或 [enable|disable]
-	var enumValues []string
-
-	// 匹配括号内的枚举值
-	matches := enumValuesRegexp.FindStringSubmatch(description)
-	if len(matches) > 1 {
-		// 分割枚举值
-		values := strings.Split(matches[1], "|")
-		for _, value := range values {
-			value = strings.TrimSpace(value)
-			if value != "" {
-				enumValues = append(enumValues, value)
-			}
-		}
-	}
-
-	return enumValues
-}
-
 // GetEnumValidationError 获取枚举参数验证错误信息
 func GetEnumValidationError(node *CommandNode, input string) string {
-	enumValues := extractEnumValues(node.Name)
-	if len(enumValues) == 0 {
+	// 统一基于节点结构体字段 EnumValues / EnumRanges
+	enumValues := node.EnumValues
+	if len(enumValues) == 0 && len(node.EnumRanges) == 0 {
 		return ""
 	}
 
@@ -876,18 +838,27 @@ func GetEnumValidationError(node *CommandNode, input string) string {
 		return fmt.Sprintf("不完整的参数，可能的完整值: %s", strings.Join(partialMatches, ", "))
 	}
 
+	// 输入可能是数值：提示内联数值范围
+	if _, err := strconv.Atoi(input); err == nil {
+		var ranges []string
+		for _, r := range node.EnumRanges {
+			if r.Min != 0 || r.Max != 0 {
+				ranges = append(ranges, fmt.Sprintf("%d-%d", r.Min, r.Max))
+			}
+		}
+		if len(ranges) > 0 {
+			return fmt.Sprintf("无效的参数值 '%s'，有效范围: %s", input, strings.Join(ranges, ", "))
+		}
+	}
+
 	return fmt.Sprintf("无效的参数值 '%s'，有效值: %s", input, strings.Join(enumValues, ", "))
 }
 
 // GetEnumCompletions 获取枚举参数的补全选项
 func GetEnumCompletions(node *CommandNode, input string) []string {
-	enumValues := extractEnumValues(node.Name)
-	if len(enumValues) == 0 {
-		return nil
-	}
-
+	// 统一基于节点结构体字段 EnumValues
 	var completions []string
-	for _, value := range enumValues {
+	for _, value := range node.EnumValues {
 		if strings.HasPrefix(strings.ToLower(value), strings.ToLower(input)) {
 			completions = append(completions, value)
 		}

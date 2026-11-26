@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
-	"github.com/TrailHuang/tnlcmd/internal/commandtree"
 	"github.com/TrailHuang/tnlcmd/internal/debuglog"
 	"github.com/TrailHuang/tnlcmd/internal/mode"
 	"github.com/TrailHuang/tnlcmd/internal/session"
@@ -17,29 +17,14 @@ import (
 
 // TelnetServer telnet服务器
 type TelnetServer struct {
-	config      *types.Config
-	commands    map[string]types.CommandInfo
-	commandTree *commandtree.CommandTree
-	context     *mode.CommandContext
-	listener    net.Listener
-	sessions    map[net.Conn]*session.Session
-	mu          sync.RWMutex
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup // 跟踪活跃的 session goroutine
-}
-
-// NewTelnetServer 创建新的telnet服务器
-func NewTelnetServer(config *types.Config, commands map[string]types.CommandInfo) *TelnetServer {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	return &TelnetServer{
-		config:   config,
-		commands: commands,
-		sessions: make(map[net.Conn]*session.Session),
-		ctx:      ctx,
-		cancel:   cancel,
-	}
+	config   *types.Config
+	context  *mode.CommandContext
+	listener net.Listener
+	sessions map[net.Conn]*session.Session
+	mu       sync.RWMutex
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup // 跟踪活跃的 session goroutine
 }
 
 // NewTelnetServerWithContext 创建带上下文的telnet服务器
@@ -47,13 +32,11 @@ func NewTelnetServerWithContext(config *types.Config, commandctx *mode.CommandCo
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &TelnetServer{
-		config:      config,
-		commands:    commandctx.GetAvailableCommands(),
-		commandTree: commandctx.CommandTree,
-		context:     commandctx,
-		sessions:    make(map[net.Conn]*session.Session),
-		ctx:         ctx,
-		cancel:      cancel,
+		config:   config,
+		context:  commandctx,
+		sessions: make(map[net.Conn]*session.Session),
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 }
 
@@ -71,6 +54,10 @@ func (ts *TelnetServer) Start() error {
 
 	return nil
 }
+
+// stopTimeout 等待会话 goroutine 退出的兜底超时。
+// 慢 Handler（阻塞 I/O、长循环）无法被强制中断，超时后放弃等待以避免 Stop 永久阻塞。
+const stopTimeout = 5 * time.Second
 
 // Stop 停止telnet服务器
 func (ts *TelnetServer) Stop() {
@@ -90,8 +77,17 @@ func (ts *TelnetServer) Stop() {
 	}
 	ts.mu.Unlock()
 
-	// 等待所有 session goroutine 退出，确保连接已关闭
-	ts.wg.Wait()
+	// 等待所有 session goroutine 退出，超时后放弃等待（Handler 无法被强制中断）
+	done := make(chan struct{})
+	go func() {
+		ts.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(stopTimeout):
+		slog.Warn("server stop timeout: some session handlers are still running", "timeout", stopTimeout)
+	}
 }
 
 // acceptConnections 接受连接

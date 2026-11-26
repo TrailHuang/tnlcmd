@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/TrailHuang/tnlcmd/internal/commandtree"
 	"github.com/TrailHuang/tnlcmd/internal/mode"
 )
 
@@ -26,64 +25,6 @@ func setupCompleter() *CommandCompleter {
 		Path:        []string{},
 	}
 	return NewCommandCompleterWithContext(ctx)
-}
-
-func TestCompleteEmptyInput(t *testing.T) {
-	c := setupCompleter()
-
-	completions := c.Complete("")
-	if len(completions) == 0 {
-		t.Error("Complete('') should return some completions")
-	}
-
-	// Should contain top-level commands
-	hasShow := false
-	hasSet := false
-	hasExit := false
-	for _, comp := range completions {
-		switch comp {
-		case "show":
-			hasShow = true
-		case "set":
-			hasSet = true
-		case "exit":
-			hasExit = true
-		}
-	}
-	if !hasShow {
-		t.Error("completions should include 'show'")
-	}
-	if !hasSet {
-		t.Error("completions should include 'set'")
-	}
-	if !hasExit {
-		t.Error("completions should include 'exit'")
-	}
-}
-
-func TestCompletePartialPrefix(t *testing.T) {
-	c := setupCompleter()
-
-	completions := c.Complete("sh")
-	if len(completions) != 1 {
-		t.Errorf("Complete('sh') should return 1 completion, got %d: %v", len(completions), completions)
-	}
-	if len(completions) > 0 && completions[0] != "show" {
-		t.Errorf("Complete('sh') = %v, want [show]", completions)
-	}
-}
-
-func TestCompleteSecondLevel(t *testing.T) {
-	c := setupCompleter()
-
-	// Note: strings.Fields strips trailing space, so "show " becomes ["show"]
-	// The Completer treats this as prefix-matching "show" itself
-	completions := c.Complete("show ")
-	if len(completions) == 0 {
-		t.Errorf("Complete('show ') should return completions, got none")
-	}
-	// With input "show" (space stripped), it matches "show" node at root level
-	// Sub-commands under "show" require navigating into the node first
 }
 
 func TestGetCommandTreeSuggestions(t *testing.T) {
@@ -152,7 +93,7 @@ func TestGetParameterCompletions(t *testing.T) {
 }
 
 func TestUpdateContext(t *testing.T) {
-	c := NewCommandCompleter()
+	c := NewCommandCompleterWithContext(nil)
 
 	rootMode := mode.NewCommandMode("root", "test>", "test mode")
 	rootMode.AddCommand("test", "Test command", func(args []string) string { return "" })
@@ -163,68 +104,16 @@ func TestUpdateContext(t *testing.T) {
 	}
 	c.UpdateContext(ctx)
 
-	completions := c.Complete("")
+	completions := c.GetNextLevelCompletions("")
 	if len(completions) != 1 || completions[0] != "test" {
-		t.Errorf("After UpdateContext, Complete('') = %v, want [test]", completions)
-	}
-}
-
-func TestUpdateCommandTree(t *testing.T) {
-	c := NewCommandCompleter()
-
-	tree := commandtree.NewCommandTree()
-	tree.AddCommand("newcmd", "New command", func(args []string) string { return "" })
-	c.UpdateCommandTree(tree)
-
-	// With only tree, context is nil so completions should come from context only
-	completions := c.Complete("")
-	if len(completions) != 0 {
-		t.Errorf("Complete('') without context should return empty, got %v", completions)
-	}
-}
-
-func TestFindLongestCommonPrefix(t *testing.T) {
-	tests := []struct {
-		input    []string
-		expected string
-	}{
-		{[]string{}, ""},
-		{[]string{"abc"}, "abc"},
-		{[]string{"abc", "abd"}, "ab"},
-		{[]string{"abc", "abc"}, "abc"},
-		{[]string{"abc", "def"}, ""},
-		{[]string{"show", "short", "shop"}, "sho"},
-		{[]string{"hello", "help", "held"}, "hel"},
-		{[]string{"prefix", "prefix-test"}, "prefix"},
-	}
-
-	for _, tt := range tests {
-		got := findLongestCommonPrefix(tt.input)
-		if got != tt.expected {
-			t.Errorf("findLongestCommonPrefix(%v) = %q, want %q", tt.input, got, tt.expected)
-		}
-	}
-}
-
-func TestGetCurrentViewCommands(t *testing.T) {
-	c := setupCompleter()
-
-	commands := c.GetCurrentViewCommands()
-	if len(commands) < 3 {
-		t.Errorf("GetCurrentViewCommands should return at least 3 commands, got %d: %v", len(commands), commands)
+		t.Errorf("After UpdateContext, GetNextLevelCompletions('') = %v, want [test]", completions)
 	}
 }
 
 func TestNilContext(t *testing.T) {
-	c := NewCommandCompleter()
+	c := NewCommandCompleterWithContext(nil)
 
 	// All methods should handle nil context gracefully
-	if completions := c.Complete("test"); len(completions) != 0 {
-		t.Errorf("Complete with nil context should return empty, got %v", completions)
-	}
-	if completions := c.GetCompletions("test"); len(completions) != 0 {
-		t.Errorf("GetCompletions with nil context should return empty, got %v", completions)
-	}
 	if completions := c.GetNextLevelCompletions("test"); len(completions) != 0 {
 		t.Errorf("GetNextLevelCompletions with nil context should return empty, got %v", completions)
 	}
@@ -316,28 +205,5 @@ func TestGetNextLevelCompletions_ModeSwitch(t *testing.T) {
 	completions = c.GetNextLevelCompletions("configure")
 	if len(completions) < 2 {
 		t.Errorf("GetNextLevelCompletions('configure') should show sub-commands, got %d: %v", len(completions), completions)
-	}
-}
-
-func TestComplete_ModeSwitchAtRoot(t *testing.T) {
-	c := setupCompleterWithModes()
-
-	// Tab completion at root level should include mode switch commands
-	completions := c.Complete("")
-	hasInterface := false
-	hasConfigure := false
-	for _, comp := range completions {
-		if comp == "interface" {
-			hasInterface = true
-		}
-		if comp == "configure" {
-			hasConfigure = true
-		}
-	}
-	if !hasInterface {
-		t.Error("root completions should include 'interface' mode switch")
-	}
-	if !hasConfigure {
-		t.Error("root completions should include 'configure' mode switch")
 	}
 }

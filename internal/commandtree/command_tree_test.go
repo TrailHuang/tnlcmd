@@ -46,7 +46,7 @@ func TestAddSimpleCommand(t *testing.T) {
 	if node.Handler == nil {
 		t.Fatal("handler is nil")
 	}
-	if node.Handler(nil) != "ok" {
+	if node.Handler(nil, nil) != "ok" {
 		t.Errorf("handler returned unexpected value")
 	}
 }

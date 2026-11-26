@@ -10,6 +10,9 @@ import (
 // CommandHandler 命令处理函数类型
 type CommandHandler = types.CommandHandler
 
+// ContextHandler 支持上下文的命令处理函数类型
+type ContextHandler = types.ContextHandler
+
 // Config 命令行配置
 type Config = types.Config
 
@@ -35,6 +38,13 @@ func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandl
 // Start 之后调用会返回错误：命令树在各活动会话间共享且只读。
 func (c *CmdLine) RegisterModeCommand(modePath string, name, description string, handler CommandHandler, detailedDescription ...string) error {
 	return c.CmdLine.RegisterModeCommand(modePath, name, description, handler, detailedDescription...)
+}
+
+// RegisterContextCommand 注册支持上下文的命令到根模式。
+// handler 可通过 ctx 感知连接关闭/服务停止并提前退出。
+// Start 之后调用会返回错误：命令树在各活动会话间共享且只读。
+func (c *CmdLine) RegisterContextCommand(name, description string, handler ContextHandler, detailedDescription ...string) error {
+	return c.CmdLine.RegisterContextCommand(name, description, handler, detailedDescription...)
 }
 
 // CreateMode 创建新的命令模式。

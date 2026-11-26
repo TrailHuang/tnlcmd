@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -27,7 +28,6 @@ type Session struct {
 	reader     *bufio.Reader
 	writer     *bufio.Writer
 	config     *types.Config
-	commands   map[string]types.CommandInfo
 	mu         sync.RWMutex
 	lastActive time.Time
 	isClosed   bool
@@ -39,34 +39,6 @@ type Session struct {
 	// writeErr 记录最近一次写入错误。一旦置位，后续 writerWrite/flushWriter 直接返回该错误，
 	// 主循环据此及时退出，避免向已断开的连接继续写入。
 	writeErr error
-}
-
-// NewSession 创建新的会话
-func NewSession(conn net.Conn, config *types.Config, commands map[string]types.CommandInfo) *Session {
-	// 创建命令上下文（使用安全类型断言，RootMode 类型不匹配时回退到临时根模式）
-	rootMode, ok := config.RootMode.(*mode.CommandMode)
-	if !ok || rootMode == nil {
-		slog.Warn("invalid RootMode type in NewSession, fallback to empty root mode", "type", fmt.Sprintf("%T", config.RootMode))
-		rootMode = mode.NewCommandMode("root", config.Prompt, "fallback root mode")
-	}
-	context := &mode.CommandContext{
-		CurrentMode: rootMode,
-	}
-
-	s := &Session{
-		conn:     conn,
-		reader:   bufio.NewReader(conn),
-		writer:   bufio.NewWriter(conn),
-		config:   config,
-		commands: commands,
-		context:  context,
-		prompt:   config.Prompt,
-	}
-
-	s.history = history.NewCommandHistory(config.MaxHistory)
-	s.completer = completer.NewCommandCompleterWithContext(s.context)
-
-	return s
 }
 
 // NewSessionWithContext 使用现有上下文创建新的会话
@@ -99,20 +71,17 @@ func NewSessionWithContext(conn net.Conn, config *types.Config, context *mode.Co
 	return s
 }
 
-// updateCommands 更新当前可用的命令列表与提示符。
-// 写操作持写锁，与外部 goroutine 的 UpdatePrompt / IsStale 互斥；
+// updateCommands 更新提示符与补全器上下文。
+// 写操作持写锁，与外部 goroutine 的 UpdatePrompt 互斥；
 // 主循环内调用方（processCommand / 初始化）已持有 RLock 时依赖 Go 的 RWLock 不可重入语义，
 // 故本方法不得在持有任何锁的状态下调用。
 func (s *Session) updateCommands() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.context != nil {
-		s.commands = s.context.GetAvailableCommands()
 		s.prompt = s.context.CurrentMode.Prompt
-		// 更新补全器的上下文（不再需要更新命令树，因为补全器使用上下文）
 		s.completer.UpdateContext(s.context)
 	} else {
-		s.commands = make(map[string]types.CommandInfo)
 		s.prompt = s.config.Prompt
 	}
 }
@@ -165,7 +134,7 @@ func (s *Session) Handle(ctx context.Context) error {
 		}
 
 		s.history.Add(line)
-		err = s.processCommand(line)
+		err = s.processCommand(ctx, line)
 		if debuglog.Enabled() {
 			errStr := ""
 			if err != nil {
@@ -274,7 +243,7 @@ func (s *Session) readLine() (string, error) {
 				"state", ps,
 				"buffer_len", buffer.Len(),
 				"first_byte_hex", hex.EncodeToString(data[:1]),
-				"prefix_hex", hex.EncodeToString(data[:minInt(n, 8)]))
+				"prefix_hex", hex.EncodeToString(data[:min(n, 8)]))
 		}
 
 		// 处理接收到的数据
@@ -431,7 +400,7 @@ func (s *Session) readLine() (string, error) {
 }
 
 // processCommand 处理命令
-func (s *Session) processCommand(cmd string) error {
+func (s *Session) processCommand(ctx context.Context, cmd string) error {
 	parts := strings.Fields(cmd)
 	if len(parts) == 0 {
 		return nil
@@ -480,7 +449,7 @@ func (s *Session) processCommand(cmd string) error {
 					return err
 				}
 
-				result := node.Handler(args)
+				result := node.Handler(ctx, args)
 				if result != "" {
 					// 检查是否为退出命令的特殊标记
 					if result == types.SentinelExit {
@@ -526,7 +495,7 @@ func (s *Session) processCommand(cmd string) error {
 				return nil
 			}
 			return nil
-		} else if err != nil && strings.Contains(err.Error(), "incomplete command") {
+		} else if err != nil && errors.Is(err, types.ErrIncompleteCommand) {
 			s.mu.RUnlock()
 			// FindCommand 返回 incomplete command，说明输入的命令不完整
 			// 按设备规范仅提示 % Incomplete command，使用 ? 查看候选
@@ -832,14 +801,6 @@ func (s *Session) remoteStr() string {
 	return "unknown"
 }
 
-// minInt 返回两个 int 中的较小值。
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // enableTelnetCharacterMode 启用telnet字符模式
 func (s *Session) enableTelnetCharacterMode() {
 	// Telnet选项协商命令
@@ -860,13 +821,6 @@ func (s *Session) enableTelnetCharacterMode() {
 
 	s.writer.Write(telnetCommands)
 	s.writer.Flush()
-}
-
-// IsStale 检查会话是否过期
-func (s *Session) IsStale() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return time.Since(s.lastActive) > 10*time.Minute
 }
 
 // handleTabCompletion 处理Tab键补全

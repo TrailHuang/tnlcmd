@@ -90,6 +90,28 @@ func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandl
 	return nil
 }
 
+// RegisterContextCommand 注册支持上下文的命令到根模式。
+// handler 可通过 ctx 感知连接关闭/服务停止并提前退出。
+// Start 之后命令树对各会话只读，此时调用将返回错误。
+// 注意：ContextHandler 无法存入旧签名的平面命令表（mode.Commands），仅注册到命令树。
+func (c *CmdLine) RegisterContextCommand(name, description string, handler types.ContextHandler, detailedDescription ...string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.isRunning {
+		return fmt.Errorf("cannot register command %q after Start: command trees are shared read-only across active sessions", name)
+	}
+
+	// 添加到根模式命令树与会话命令树（与 RegisterCommand 的双树注册保持一致）
+	if err := c.rootMode.CommandTree.AddContextCommand(name, description, handler, detailedDescription...); err != nil {
+		slog.Warn("failed to add context command to root mode tree", "error", err)
+	}
+	if err := c.commandTree.AddContextCommand(name, description, handler, detailedDescription...); err != nil {
+		slog.Warn("failed to add context command to tree", "error", err)
+	}
+	return nil
+}
+
 // findOrCreateMode 查找或创建模式路径
 func (c *CmdLine) findOrCreateMode(modePath string, description string) *mode.CommandMode {
 	currentMode := c.rootMode
@@ -222,17 +244,17 @@ func (c *CmdLine) Start() error {
 // Stop 停止命令行服务
 func (c *CmdLine) Stop() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if !c.isRunning {
+		c.mu.Unlock()
 		return fmt.Errorf("cmdline is not running")
 	}
+	c.isRunning = false
+	c.mu.Unlock()
 
+	// 锁外等待会话退出：Stop 内部含超时兜底，持锁调用会阻塞其他操作
 	if c.server != nil {
 		c.server.Stop()
 	}
-
-	c.isRunning = false
 	return nil
 }
 
@@ -252,9 +274,17 @@ func (c *CmdLine) CreateCloseConnectionHandler() types.CommandHandler {
 	}
 }
 
-// registerBuiltinCommands 注册内置命令
+// registerBuiltinCommands 注册内置命令。
+// 直接写入模式与命令树，绕过 RegisterCommand 的 isRunning 守卫：
+// 本方法在 Start 流程内、isRunning 置位后调用，走守卫路径会导致注册静默失败
+// （回归：exit/quit 显示 Unknown command，无法退出会话）。
 func (c *CmdLine) registerBuiltinCommands() {
-	// 添加退出命令（Start 流程内、isRunning 置位前调用，注册必然成功）
-	_ = c.RegisterCommand("exit", "Exit and close connection", c.CreateCloseConnectionHandler())
-	_ = c.RegisterCommand("quit", "Exit and close connection", c.CreateCloseConnectionHandler())
+	const exitDesc = "Exit and close connection"
+	exitHandler := c.CreateCloseConnectionHandler()
+
+	c.rootMode.AddCommand("exit", exitDesc, exitHandler)
+	c.rootMode.AddCommand("quit", exitDesc, exitHandler)
+
+	_ = c.commandTree.AddCommand("exit", exitDesc, exitHandler)
+	_ = c.commandTree.AddCommand("quit", exitDesc, exitHandler)
 }

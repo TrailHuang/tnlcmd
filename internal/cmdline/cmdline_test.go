@@ -51,6 +51,28 @@ func TestRegisterAfterStartRejected(t *testing.T) {
 	}
 }
 
+// TestBuiltinCommandsRegisteredAfterStart 验证 Start 后内置命令 exit/quit 已注册。
+// 回归测试：isRunning 置位先于 registerBuiltinCommands 且后者走守卫路径时，
+// 内置命令注册会静默失败，导致会话中 exit 显示 Unknown command 无法退出。
+func TestBuiltinCommandsRegisteredAfterStart(t *testing.T) {
+	c := NewCmdLine(nil)
+	c.config.Port = 0
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer func() { _ = c.Stop() }()
+
+	for _, name := range []string{"exit", "quit"} {
+		node, _, _, err := c.rootMode.CommandTree.FindCommand([]string{name})
+		if err != nil || node == nil || node.Handler == nil {
+			t.Errorf("builtin command %q must be registered with a handler after Start, got node=%v err=%v", name, node, err)
+		}
+		if _, exists := c.rootMode.Commands[name]; !exists {
+			t.Errorf("builtin command %q must exist in rootMode.Commands after Start", name)
+		}
+	}
+}
+
 // TestSetConfigAfterStart 验证 Start 后 SetConfig 仍然可用（非树结构修改）。
 func TestSetConfigAfterStart(t *testing.T) {
 	c := NewCmdLine(nil)

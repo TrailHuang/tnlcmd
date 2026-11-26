@@ -1,10 +1,33 @@
 // Package types 定义 TNLCMD 库的公共类型
 package types
 
-import "log/slog"
+import (
+	"context"
+	"errors"
+)
 
-// CommandHandler 命令处理函数类型
+// CommandHandler 命令处理函数类型（旧签名，保持向后兼容）
 type CommandHandler func(args []string) string
+
+// ContextHandler 支持上下文的命令处理函数类型。
+// handler 可通过 ctx 感知连接关闭/服务停止并提前退出（Go 无法强杀 goroutine，
+// 不检查 ctx 的 handler 仍由服务端 Stop 超时兜底）。
+type ContextHandler func(ctx context.Context, args []string) string
+
+// Adapt 将旧签名 CommandHandler 包装为 ContextHandler，忽略 ctx。
+func Adapt(h CommandHandler) ContextHandler {
+	return func(_ context.Context, args []string) string {
+		return h(args)
+	}
+}
+
+// 命令查找 sentinel error，调用方应使用 errors.Is 判断而非字符串匹配
+var (
+	// ErrIncompleteCommand 命令不完整（缺少后续必需的子命令或参数）
+	ErrIncompleteCommand = errors.New("incomplete command")
+	// ErrUnknownCommand 未知命令
+	ErrUnknownCommand = errors.New("unknown command")
+)
 
 // 命令处理函数特殊返回值（sentinel values）
 // 用于向会话层传达特殊操作意图
@@ -32,7 +55,6 @@ const (
 	NodeTypeNum                               // 数值范围节点 <>
 	NodeTypeString                            // 字符串参数节点（大写字母）
 	NodeTypeModeSwitch                        // 视图切换节点
-	NodeTypeExit                              // 退出节点
 )
 
 // Config 命令行配置
@@ -41,20 +63,6 @@ type Config struct {
 	Port       int
 	WelcomeMsg string
 	MaxHistory int
-	PageSize   int          // 分页大小（行数）；<=0 表示禁用分页，一次性输出全部内容
-	logger     *slog.Logger // 可选：自定义日志器，nil 时使用 slog.Default()
-	RootMode   interface{}  // 使用 interface{} 避免循环导入
-}
-
-// SetLogger 设置自定义日志器
-func (c *Config) SetLogger(l *slog.Logger) {
-	c.logger = l
-}
-
-// Logger 返回有效的 slog.Logger，如果未设置则返回默认 logger
-func (c *Config) Logger() *slog.Logger {
-	if c != nil && c.logger != nil {
-		return c.logger
-	}
-	return slog.Default()
+	PageSize   int         // 分页大小（行数）；<=0 表示禁用分页，一次性输出全部内容
+	RootMode   interface{} // 使用 interface{} 避免循环导入
 }

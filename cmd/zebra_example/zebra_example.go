@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/TrailHuang/tnlcmd"
 )
@@ -60,6 +62,12 @@ func main() {
 		if err != nil {
 			log.Fatalf("register root command %q: %v", cmd.name, err)
 		}
+	}
+
+	// 注册支持上下文的命令（新版 ContextHandler 示例）：
+	// handler 内通过 ctx 感知连接关闭/服务停止，可提前取消长时间运行的任务
+	if err := cmdline.RegisterContextCommand("run task", "Run a cancellable task (ctx demo)", runTaskHandler); err != nil {
+		log.Fatalf("register context command %q: %v", "run task", err)
 	}
 
 	// 创建配置模式
@@ -202,6 +210,35 @@ func pingHandler(args []string) string {
 
 func clearHandler(args []string) string {
 	return "Functions cleared\r\n"
+}
+
+// runTaskHandler 新版 ContextHandler 示例：演示通过 ctx 取消长时间运行的任务。
+// 对比旧版 pingHandler：ctx 版可在连接关闭（Ctrl+D）或服务 Stop 时提前退出，
+// 而旧签名 handler 只能等任务自然跑完。
+func runTaskHandler(ctx context.Context, args []string) string {
+	steps := 5
+	if len(args) > 0 {
+		if n, err := strconv.Atoi(args[0]); err == nil && n > 0 && n <= 60 {
+			steps = n
+		}
+	}
+
+	var result strings.Builder
+	fmt.Fprintf(&result, "Task started: %d steps (about %d seconds)\r\n", steps, steps)
+
+	for i := 1; i <= steps; i++ {
+		select {
+		case <-ctx.Done():
+			// 连接已关闭或服务正在 Stop，立即中止任务释放资源
+			result.WriteString("Task canceled by context\r\n")
+			return result.String()
+		case <-time.After(1 * time.Second):
+			fmt.Fprintf(&result, "  Step %d/%d done\r\n", i, steps)
+		}
+	}
+
+	result.WriteString("Task completed\r\n")
+	return result.String()
 }
 
 func debugHandler(args []string) string {
