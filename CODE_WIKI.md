@@ -230,8 +230,11 @@ tnlcmd/
 - `GetCommandTreeSuggestions`：`?` 帮助主入口，返回「命令名（32 宽左对齐） - 描述」格式列表，并附带视图切换命令。
 - `GetNextLevelCompletions`：Tab 补全主入口，处理唯一匹配（自动补全/展开 ModeSwitch 目标子命令）与多匹配（列出全部）。
 - `GetParameterCompletions`：参数节点补全。
+- `walkExact`：共享的逐 token 精确匹配导航，`GetNextLevelCompletions` 与 `GetParameterCompletions` 复用。
+- `formatCandidate`：统一展示格式（名称定宽 32 + 描述），`?` 帮助与下钻候选共用。
+- `describeChildrenWithCR`：生成下钻候选并按需追加 `<cr>`（存在可选参数子节点时）。
 - `resolveChildren`：当节点是 ModeSwitch 时，返回目标视图命令树的根子节点。
-- `findLongestCommonPrefix`：求最长公共前缀用于智能补全。
+- 输出契约由 `TestProductionPathContracts` 守护：Tab 补全/参数补全返回裸名称（供整行回填），`?` 帮助返回展示行。
 
 ### 4.8 `internal/history` — 命令历史
 

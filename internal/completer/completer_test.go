@@ -189,3 +189,71 @@ func TestGetNextLevelCompletions_ModeSwitch(t *testing.T) {
 		t.Errorf("GetNextLevelCompletions('configure') should show sub-commands, got %d: %v", len(completions), completions)
 	}
 }
+
+// TestProductionPathContracts 守护三条生产入口（session 层消费）的输出契约：
+//   - GetNextLevelCompletions（Tab 命令补全）：返回裸命令名——session 在唯一匹配时
+//     直接将其回填输入行，绝不能混入描述文本；
+//   - GetParameterCompletions（Tab 参数补全回退）：返回裸参数名；
+//   - GetCommandTreeSuggestions（? 帮助）：返回"名称定宽 32 字符 + 描述"展示行。
+func TestProductionPathContracts(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "test>", "test mode")
+	handler := func(args []string) string { return "" }
+	// "s" 为 show 的子命令，"STRING" 为其字符串参数节点（全大写 → NodeTypeString）
+	rootMode.AddCommand("show s STRING", "Show string param", handler)
+	rootMode.AddCommand("show version", "Show version", handler)
+	// "set SET SETTING"：String 参数节点 "SET" 下挂参数节点 "SETTING"（纯大写字母
+	// 才会被解析为参数节点），用于构造 GetParameterCompletions 的非空用例
+	// （其导航要求逐 token 精确命中，且按落点节点名前缀过滤参数子节点）
+	rootMode.AddCommand("set SET SETTING", "Set two strings", handler)
+
+	c := NewCommandCompleterWithContext(&mode.CommandContext{
+		CurrentMode: rootMode,
+		Path:        []string{},
+	})
+
+	// 契约 1：Tab 命令补全 → 裸命令名，可直接整行回填
+	got := c.GetNextLevelCompletions("show v")
+	if len(got) != 1 || got[0] != "show version" {
+		t.Fatalf("GetNextLevelCompletions('show v') = %v, want [show version]", got)
+	}
+	if strings.Contains(got[0], "Show version") {
+		t.Errorf("Tab completion must return bare name without description, got %q", got[0])
+	}
+
+	// 契约 2：Tab 参数补全回退 → 裸参数名
+	got = c.GetParameterCompletions("set SET")
+	if len(got) != 1 || got[0] != "SETTING" {
+		t.Fatalf("GetParameterCompletions('set SET') = %v, want [SETTING]", got)
+	}
+	if strings.Contains(got[0], "string") {
+		t.Errorf("parameter completion must return bare name without description, got %q", got[0])
+	}
+
+	// 契约 3：? 帮助 → "名称定宽 32 字符 + 描述" 展示行
+	got = c.GetCommandTreeSuggestions("show")
+	if len(got) == 0 {
+		t.Fatal("GetCommandTreeSuggestions('show') should return suggestions")
+	}
+	sawVersion := false
+	for _, line := range got {
+		// 名称占据行首（不足 32 字符时以空格填充）
+		name := strings.Fields(line)[0]
+		if name != "s" && name != "version" {
+			continue
+		}
+		if name == "version" {
+			sawVersion = true
+		}
+		// 描述必须存在（区别于 Tab 补全的裸名称契约）
+		if !strings.Contains(line, " ") || strings.TrimSpace(line) == name {
+			t.Errorf("? suggestion %q must include a description", line)
+		}
+		// 定宽格式：名称 + 空格填充至 32 列，随后紧跟描述
+		if !strings.HasPrefix(line, name+strings.Repeat(" ", 32-len(name))) {
+			t.Errorf("? suggestion %q is not formatted as name padded to 32 columns", line)
+		}
+	}
+	if !sawVersion {
+		t.Errorf("? suggestions should contain 'version' entry, got %v", got)
+	}
+}

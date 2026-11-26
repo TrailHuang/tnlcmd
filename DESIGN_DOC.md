@@ -329,7 +329,7 @@ telnet localhost 2323
 9. **安全增强**（m7）：最大连接数、密码认证、可选 TLS、空闲会话回收（接线 `IsStale`）— 工单 05/06
 10. **行编辑增强**（m8）：左右方向键、Ctrl+A/E、命令别名 — 工单 07（依赖 01）
 11. **历史环形缓冲**（M7）— ✅ 已完成（2026-11-26，工单 01）：`internal/history` 改为固定容量环形数组（`buf`/`start`/`size`），容量满时覆盖最旧记录并前移起点，`Add` 为 O(1)；`Get`/`GetAll`/`Previous`/`Next` 公共 API 语义保持不变；新增回绕/去重/零容量用例与 `BenchmarkAddOverflow`（满容量写入 ~23 ns/op）；会话层上/下键历史浏览经集成测试验证与改动前一致
-12. **收敛模式切换与补全入口**（M4/M5）— M5 ✅ 已完成（2026-11-26，工单 03）：新增 `CommandContext.EnterMode`（ChangeMode + `"Entering %s mode\r\n"` 消息）作为模式切换唯一实现路径，`processCommand` 的 ModeSwitch 分支、无 handler 中间节点回退分支与 `createModeChangeHandler` 均委托它；M4 待处理（工单 04）
+12. **收敛模式切换与补全入口**（M4/M5）— ✅ 已全部完成（2026-11-26）：M5（工单 03）新增 `CommandContext.EnterMode`（ChangeMode + `"Entering %s mode\r\n"` 消息）作为模式切换唯一实现路径，`processCommand` 的 ModeSwitch 分支、无 handler 中间节点回退分支与 `createModeChangeHandler` 均委托它；M4 残余（工单 04）—— `completer` 提取共用导航 `walkExact`（`GetNextLevelCompletions`/`GetParameterCompletions` 共享）、合并单调用方冗余层 `describeChildren` → `describeChildrenWithCR`、提取统一展示格式 `formatCandidate`，并新增 `TestProductionPathContracts` 守护三条生产入口（Tab 裸名称回填 / Tab 参数裸参数名 / ? "名称定宽+描述" 展示行）的输出契约
 13. **热路径内存优化**（m2）：复用读缓冲 — ✅ 已完成（2026-11-26，工单 02）：`readLine` 读缓冲提升为会话级字段 `Session.readBuf`（`readBufSize = 1024`），会话创建时分配一次、全程复用；`BenchmarkReadLine` 显示每行 24 B/op、2 allocs/op（不再每轮读取分配 1KB）；IAC/ESC/UTF-8 跨批次状态机用例全部通过
 
 ### P3 — 长期演进

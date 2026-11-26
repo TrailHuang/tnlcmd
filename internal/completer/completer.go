@@ -37,7 +37,28 @@ func (c *CommandCompleter) resolveChildren(node *commandtree.CommandNode) map[st
 	return node.Children
 }
 
-// resolveNodeForInput 沿输入路径遍历到最后一个 token 之前的节点。
+// walkExact 从 node 起按精确名连续下钻前 count 个 token；任一层不存在即返回 nil。
+// count 为 0 时不移动（返回 node 本身），为 -1 时同样不移动。
+// GetNextLevelCompletions 与 GetParameterCompletions 共用此导航实现，避免重复遍历逻辑。
+func walkExact(node *commandtree.CommandNode, tokens []string, count int) *commandtree.CommandNode {
+	for i := 0; i < count; i++ {
+		child, exists := node.Children[tokens[i]]
+		if !exists {
+			return nil
+		}
+		node = child
+	}
+	return node
+}
+
+// formatCandidate 生成候选的统一展示文本：命令名定宽 32 字符 + 描述。
+// ? 帮助（GetCommandTreeSuggestions）与下钻候选（describeChildrenWithCR）共用，
+// 保证三条生产入口的展示格式一致。
+func formatCandidate(name string, child *commandtree.CommandNode) string {
+	return fmt.Sprintf("%-32s %s", name, child.Description)
+}
+
+// resolveNodeForInput 沿输入路径精确匹配遍历到最后一个 token 之前的节点。
 // 返回该节点、输入拆分后的全部 token 以及最后一个 token（可能为空字符串）。
 // 当上下文不可用或路径无法遍历到时返回 (nil, inputParts, "")。
 func (c *CommandCompleter) resolveNodeForInput(input string) (*commandtree.CommandNode, []string, string) {
@@ -45,13 +66,9 @@ func (c *CommandCompleter) resolveNodeForInput(input string) (*commandtree.Comma
 		return nil, nil, ""
 	}
 	inputParts := strings.Fields(input)
-	node := c.context.CurrentMode.CommandTree.Root
-	for i := 0; i < len(inputParts)-1; i++ {
-		if child, exists := node.Children[inputParts[i]]; exists {
-			node = child
-		} else {
-			return nil, inputParts, ""
-		}
+	node := walkExact(c.context.CurrentMode.CommandTree.Root, inputParts, len(inputParts)-1)
+	if node == nil {
+		return nil, inputParts, ""
 	}
 	lastPart := ""
 	if len(inputParts) > 0 {
@@ -134,14 +151,9 @@ func (c *CommandCompleter) GetParameterCompletions(input string) []string {
 	}
 
 	inputParts := strings.Fields(input)
-	node := c.context.CurrentMode.CommandTree.Root
-
-	for i := 0; i < len(inputParts); i++ {
-		if child, exists := node.Children[inputParts[i]]; exists {
-			node = child
-		} else {
-			return completions
-		}
+	node := walkExact(c.context.CurrentMode.CommandTree.Root, inputParts, len(inputParts))
+	if node == nil {
+		return completions
 	}
 
 	var lastPart string
@@ -156,17 +168,6 @@ func (c *CommandCompleter) GetParameterCompletions(input string) []string {
 	}
 
 	return completions
-}
-
-// describeChildren 生成节点下一级候选的显示文本（名称定宽 + 描述）。
-// 对 ModeSwitch 节点会解析到目标视图的命令；对普通命令节点返回其子命令/参数节点。
-func (c *CommandCompleter) describeChildren(node *commandtree.CommandNode) []string {
-	var out []string
-	children := c.resolveChildren(node)
-	for name, child := range children {
-		out = append(out, fmt.Sprintf("%-32s %s", name, child.Description))
-	}
-	return out
 }
 
 // GetCommandTreeSuggestions 基于命令树获取帮助候选，遵循网络设备分级语义：
@@ -231,7 +232,7 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 			hasOptional = true
 		}
 		if strings.HasPrefix(name, lastPart) {
-			suggestions = append(suggestions, fmt.Sprintf("%-32s %s", name, child.Description))
+			suggestions = append(suggestions, formatCandidate(name, child))
 			seen[name] = true
 		}
 	}
@@ -256,13 +257,21 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 	return suggestions
 }
 
-// describeChildrenWithCR 生成节点下一级候选并追加 <cr> 提示（节点存在可选参数子节点时）。
+// describeChildrenWithCR 生成节点下一级候选的展示文本并按需追加 <cr> 提示。
+// 对 ModeSwitch 节点会解析到目标视图的命令；对普通命令节点返回其子命令/参数节点
+// （名称定宽 + 描述）；节点存在可选参数子节点时追加 <cr> 提示。
 func (c *CommandCompleter) describeChildrenWithCR(node *commandtree.CommandNode) []string {
-	out := c.describeChildren(node)
-	for _, child := range c.resolveChildren(node) {
+	children := c.resolveChildren(node)
+	out := make([]string, 0, len(children)+1)
+	hasOptional := false
+	for name, child := range children {
+		out = append(out, formatCandidate(name, child))
 		if child.Type == types.NodeTypeOptional {
-			return append(out, "<cr>")
+			hasOptional = true
 		}
+	}
+	if hasOptional {
+		out = append(out, "<cr>")
 	}
 	return out
 }
