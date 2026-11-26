@@ -49,7 +49,7 @@
 | **Session** | `internal/session/session.go` | 909 | 逐字节终端 I/O、输入状态机（Telnet/ANSI/UTF-8）、命令分发、参数验证、分页输出 |
 | **Command Tree** | `internal/commandtree/command_tree.go` | 897 | Trie 命令存储、参数解析、命令匹配（含唯一前缀匹配）、参数验证 |
 | **Completer** | `internal/completer/completer.go` | 375 | Tab 补全、`?` 帮助、参数建议、最长公共前缀压缩 |
-| **History** | `internal/history/history.go` | 108 | 容量受限的历史记录（切片实现）、上下键导航 |
+| **History** | `internal/history/history.go` | 123 | 容量受限的历史记录（环形缓冲实现）、上下键导航 |
 | **Mode** | `internal/mode/mode.go` | 157 | 视图层级、模式切换、`CommandContext` 及其克隆 |
 | **debuglog** | `internal/debuglog/debuglog.go` | 105 | 环境变量控制的调试日志（默认关闭，零开销） |
 | **Types** | `pkg/types/types.go` | 60 | 公共类型定义、Sentinel 常量 |
@@ -287,7 +287,7 @@ telnet localhost 2323
 | M4 | **补全器存在未使用入口与重复逻辑**：`Complete` 与 `GetCompletions` 仅 `includeModeSwitch` 参数不同且生产路径均未调用；生产只使用 `GetNextLevelCompletions`/`GetParameterCompletions`/`GetCommandTreeSuggestions` | `completer.go:122-199,236-253` | 删除或合并死入口 |
 | M5 | **模式切换双路径**：`GetAvailableCommands` 生成的 `createModeChangeHandler`（闭包直接 `ChangeMode`）与 `processCommand` 的 ModeSwitch 树节点分支重复实现切换语义 | `mode.go:151-156`, `session.go:453-515` | 收敛为单一实现 |
 | M6 | **`SetConfig` 运行期语义不完整**：`port` 修改对已监听服务无效；`prompt` 仅更新 `rootMode`，其他模式及活动会话提示符不刷新（`UpdateAllSessionsPrompt` 未被接线） | `cmdline.go:133-166` | 文档化限制或补全联动 |
-| M7 | **历史非环形缓冲**：容量超限时 `history[1:]` 头部裁剪，导致 O(n) 拷贝与底层数组指针漂移 | `history.go:36-38` | 改环形缓冲或 `copy` 压实 |
+| M7 | ✅ **历史非环形缓冲**（已修复）：容量超限时 `history[1:]` 头部裁剪，导致 O(n) 拷贝与底层数组指针漂移 | `history.go` | 已改为固定容量环形数组，覆盖写入 O(1) |
 | M8 | **Handler 无 ctx/超时，Stop 可被慢 Handler 拖住**：`Stop()` 持 `cmdline.mu` 调 `server.Stop()` → `wg.Wait()`，用户 Handler 内 `time.Sleep`/阻塞 I/O 会延迟关闭且无法中断 | `cmdline.go:204-219`, `server.go:76-95` | Handler 增加 ctx 参数；`Stop` 增加超时兜底 |
 
 ### 6.3 一般问题 (Minor)
@@ -324,11 +324,13 @@ telnet localhost 2323
 
 ### P2 — 中期改进
 
-9. **安全增强**（m7）：最大连接数、密码认证、可选 TLS、空闲会话回收（接线 `IsStale`）
-10. **行编辑增强**（m8）：左右方向键、Ctrl+A/E、命令别名
-11. **历史环形缓冲**（M7）
-12. **收敛模式切换与补全入口**（M4/M5）
-13. **热路径内存优化**（m2）：复用读缓冲
+> 工单拆分见 `.scratch/p2-improvements/issues/`（本地 markdown tracker，共 7 张工单）。
+
+9. **安全增强**（m7）：最大连接数、密码认证、可选 TLS、空闲会话回收（接线 `IsStale`）— 工单 05/06
+10. **行编辑增强**（m8）：左右方向键、Ctrl+A/E、命令别名 — 工单 07（依赖 01）
+11. **历史环形缓冲**（M7）— ✅ 已完成（2026-11-26，工单 01）：`internal/history` 改为固定容量环形数组（`buf`/`start`/`size`），容量满时覆盖最旧记录并前移起点，`Add` 为 O(1)；`Get`/`GetAll`/`Previous`/`Next` 公共 API 语义保持不变；新增回绕/去重/零容量用例与 `BenchmarkAddOverflow`（满容量写入 ~23 ns/op）；会话层上/下键历史浏览经集成测试验证与改动前一致
+12. **收敛模式切换与补全入口**（M4/M5）— 工单 03/04
+13. **热路径内存优化**（m2）：复用读缓冲 — 工单 02
 
 ### P3 — 长期演进
 
@@ -360,7 +362,7 @@ tnlcmd/
 │   ├── debuglog/
 │   │   └── debuglog.go          # 环境变量调试日志 (105 行) [无测试]
 │   ├── history/
-│   │   ├── history.go           # 命令历史 (108 行)
+│   │   ├── history.go           # 命令历史 (123 行，环形缓冲)
 │   │   └── history_test.go
 │   ├── mode/
 │   │   ├── mode.go              # 视图与上下文 (157 行)

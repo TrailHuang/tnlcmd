@@ -234,10 +234,10 @@ tnlcmd/
 
 ### 4.8 `internal/history` — 命令历史
 
-`CommandHistory` 线程安全环形缓冲（`sync.RWMutex`）：
+`CommandHistory` 线程安全环形缓冲（`sync.RWMutex`）：底层为固定容量数组 `buf`，配合 `start`（最旧记录物理下标）与 `size`（有效记录数）实现环形布局。
 
-- `Add`：去重（连续相同不入队）、超容量丢弃最旧。
-- `Get`/`GetAll`/`Len`：只读查询。
+- `Add`：去重（连续相同不入队）；未满时写入尾部，满了则覆盖最旧记录并前移 `start` —— 恒为 O(1)。
+- `Get`/`GetAll`/`Len`：只读查询，按逻辑下标/逻辑顺序返回，不暴露物理布局。
 - `Previous`/`Next`：上下键导航，`position = -1` 表示未在浏览中。
 - `ResetPosition`：重置浏览位置。
 

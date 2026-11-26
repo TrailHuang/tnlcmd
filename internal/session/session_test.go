@@ -29,13 +29,19 @@ type pipeTest struct {
 // pageSize<=0 表示禁用分页。
 func newPipeTest(t *testing.T, pageSize int, rootMode *mode.CommandMode) *pipeTest {
 	t.Helper()
+	return newPipeTestWithHistory(t, pageSize, 10, rootMode)
+}
+
+// newPipeTestWithHistory 与 newPipeTest 相同，但可指定历史容量上限。
+func newPipeTestWithHistory(t *testing.T, pageSize, maxHistory int, rootMode *mode.CommandMode) *pipeTest {
+	t.Helper()
 	clientConn, serverConn := net.Pipe()
 
 	config := &types.Config{
 		Prompt:     "PROMPT_END>",
 		Port:       0,
 		WelcomeMsg: "",
-		MaxHistory: 10,
+		MaxHistory: maxHistory,
 		PageSize:   pageSize,
 		RootMode:   rootMode,
 	}
@@ -350,6 +356,71 @@ func TestSession_ESC_SplitAcrossReads(t *testing.T) {
 	}
 	if got, err := pt.readUntil("R1", 3*time.Second); err != nil {
 		t.Fatalf("ESC split across reads broke history navigation: %v (buf=%q)", err, got)
+	}
+}
+
+// TestSession_HistoryNavigationWithWrapAround 验证历史容量回绕后，
+// 上/下方向键浏览到的命令顺序与改动前一致（工单 01 的集成验证）。
+func TestSession_HistoryNavigationWithWrapAround(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	rootMode.AddCommand("cmd1", "cmd1", func(args []string) string { return "R1\r\n" })
+	rootMode.AddCommand("cmd2", "cmd2", func(args []string) string { return "R2\r\n" })
+	rootMode.AddCommand("cmd3", "cmd3", func(args []string) string { return "R3\r\n" })
+
+	// 历史容量为 2：执行 cmd1、cmd2、cmd3 后，最旧的 cmd1 应被淘汰
+	pt := newPipeTestWithHistory(t, 0, 2, rootMode)
+	defer pt.close()
+
+	for i, cmd := range []string{"cmd1", "cmd2", "cmd3"} {
+		if err := pt.write(cmd + "\r\n"); err != nil {
+			t.Fatalf("write %s failed: %v", cmd, err)
+		}
+		want := fmt.Sprintf("R%d", i+1)
+		if _, err := pt.readUntil(want, 3*time.Second); err != nil {
+			t.Fatalf("did not see %s: %v", want, err)
+		}
+		if _, err := pt.readUntil("PROMPT_END>", 3*time.Second); err != nil {
+			t.Fatalf("did not see prompt after %s: %v", want, err)
+		}
+	}
+
+	// 上方向键一次 → cmd3（最近一条，bash 式行为），再上一次 → cmd2（cmd1 已被淘汰）
+	if err := pt.write("\x1b[A"); err != nil {
+		t.Fatalf("write up arrow failed: %v", err)
+	}
+	if _, err := pt.readUntil("PROMPT_END>cmd3", 3*time.Second); err != nil {
+		t.Fatalf("first up arrow should recall cmd3: %v", err)
+	}
+
+	if err := pt.write("\x1b[A"); err != nil {
+		t.Fatalf("write second up arrow failed: %v", err)
+	}
+	if _, err := pt.readUntil("PROMPT_END>cmd2", 3*time.Second); err != nil {
+		t.Fatalf("second up arrow should recall cmd2 (cmd1 evicted): %v", err)
+	}
+
+	// 再次上移应停在最旧的一条（cmd2）
+	if err := pt.write("\x1b[A"); err != nil {
+		t.Fatalf("write third up arrow failed: %v", err)
+	}
+	if _, err := pt.readUntil("PROMPT_END>cmd2", 3*time.Second); err != nil {
+		t.Fatalf("third up arrow should stay at cmd2 (oldest): %v", err)
+	}
+
+	// 下方向键一次 → cmd3（最新一条）
+	if err := pt.write("\x1b[B"); err != nil {
+		t.Fatalf("write down arrow failed: %v", err)
+	}
+	if _, err := pt.readUntil("PROMPT_END>cmd3", 3*time.Second); err != nil {
+		t.Fatalf("down arrow should recall cmd3: %v", err)
+	}
+
+	// 再按一次下方向键 → 回到空输入行
+	if err := pt.write("\x1b[B"); err != nil {
+		t.Fatalf("write second down arrow failed: %v", err)
+	}
+	if _, err := pt.readUntil("PROMPT_END>", 3*time.Second); err != nil {
+		t.Fatalf("down arrow past end should clear the line: %v", err)
 	}
 }
 
