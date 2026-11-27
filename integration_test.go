@@ -717,6 +717,47 @@ func TestIntegration_CommandParameterValidationMatrix(t *testing.T) {
 	}
 }
 
+// TestIntegration_CommandCompletionParameterLayer 验证真实会话中 Tab 能进入参数层、
+// 尾随空格不被吞掉，且 ? 帮助与 Tab 共用导航层级（工单 07）。
+func TestIntegration_CommandCompletionParameterLayer(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+		count int // 期望 want 在输出中出现的次数（>1 用于排除命令回显本身）
+	}{
+		{"tab after keyword", "set debug2 \t", "<1-10>", 1},
+		{"tab after numeric value", "set debug2 5 \t", "(on|off)", 1},
+		{"tab enum value", "set debug2 5 of\t", "set debug2 5 off", 1},
+		{"help parameter layer", "set debug2 ?", "Range parameter", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			it := newIntegrationTest(t)
+			defer it.cleanup()
+			it.rootMode.AddCommand("set debug2 <1-10> (on|off)", "Debug", func(args []string) string { return "OK\r\n" })
+			it.context.CommandTree = it.rootMode.CommandTree
+
+			it.startServer()
+			it.connect()
+			defer it.disconnect()
+			if _, err := it.readUntilPrompt(3 * time.Second); err != nil {
+				t.Fatalf("drain initial prompt failed: %v", err)
+			}
+			if err := it.write(tc.input); err != nil {
+				t.Fatalf("write failed: %v", err)
+			}
+			buf, err := it.readUntil(tc.want, 3*time.Second)
+			if err != nil && tc.count == 1 {
+				t.Fatalf("expected %q in output, got %q: %v", tc.want, buf, err)
+			}
+			if got := strings.Count(buf, tc.want); got < tc.count {
+				t.Errorf("output %q contains %q %d times, want at least %d", buf, tc.want, got, tc.count)
+			}
+		})
+	}
+}
+
 // TestIntegration_RegisterCommandRejectsInvalidSyntax 验证非法参数语法在注册期
 // 就返回错误，不再静默降级为字面命令（工单 06）。
 func TestIntegration_RegisterCommandRejectsInvalidSyntax(t *testing.T) {

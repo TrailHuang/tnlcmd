@@ -257,3 +257,67 @@ func TestProductionPathContracts(t *testing.T) {
 		t.Errorf("? suggestions should contain 'version' entry, got %v", got)
 	}
 }
+
+// newParamCompleter 构造含范围、枚举与占位符参数的补全器。
+func newParamCompleter() *CommandCompleter {
+	rootMode := mode.NewCommandMode("root", "R>", "test")
+	handler := func(args []string) string { return "" }
+	rootMode.AddCommand("set debug2 <1-10> (on|off)", "Debug", handler)
+	rootMode.AddCommand("ping A.B.C.D", "Ping", handler)
+	return NewCommandCompleterWithContext(&mode.CommandContext{
+		CurrentMode: rootMode,
+		Path:        []string{},
+	})
+}
+
+// TestTabParameterCompletion 验证 Tab 进入参数层、枚举值补全与尾随空格语义（工单 07）。
+func TestTabParameterCompletion(t *testing.T) {
+	c := newParamCompleter()
+	cases := []struct {
+		input string
+		want  string // 用逗号连接期望结果，空串表示无候选
+	}{
+		// 命令树中参数按注册顺序串联：<1-10> 之后才是 (on|off)
+		{"set debug2", "set debug2"},
+		{"set debug2 ", "set debug2 <1-10>"},
+		{"set debug2 5 ", "set debug2 5 (on|off)"},
+		{"set debug2 5 o", "off,on"},
+		{"set debug2 5 on", "set debug2 5 on"},
+		{"set debug2 5 of", "set debug2 5 off"},
+		{"ping A.B.C.D ", ""},
+	}
+	for _, tc := range cases {
+		got := strings.Join(c.GetNextLevelCompletions(tc.input), ",")
+		if got != tc.want {
+			t.Errorf("GetNextLevelCompletions(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+		// 多候选必须顺序稳定
+		for i := 0; i < 5; i++ {
+			if again := strings.Join(c.GetNextLevelCompletions(tc.input), ","); again != got {
+				t.Fatalf("unstable candidates for %q: %q vs %q", tc.input, got, again)
+			}
+		}
+	}
+}
+
+// TestHelpAndTabShareNavigation 验证 ? 帮助与 Tab 对同一输入给出一致的层级，
+// 仅展示格式不同（帮助为定宽名称+描述，Tab 为裸名称）（工单 07）。
+func TestHelpAndTabShareNavigation(t *testing.T) {
+	c := newParamCompleter()
+	tab := c.GetNextLevelCompletions("set debug2 ")
+	help := c.GetCommandTreeSuggestions("set debug2 ")
+	if len(tab) != 1 {
+		t.Fatalf("Tab candidates = %v, want 1 parameter entry", tab)
+	}
+	// Tab 单候选回填整行，取出参数名用于与帮助输出对照
+	tabName := tab[0][len("set debug2 "):]
+	found := false
+	for _, line := range help {
+		if strings.HasPrefix(line, tabName+strings.Repeat(" ", 32-len(tabName))) && strings.TrimSpace(strings.TrimPrefix(line, tabName)) != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("? help missing parameter %q (help=%v)", tabName, help)
+	}
+}
