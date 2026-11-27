@@ -321,3 +321,26 @@ func TestHelpAndTabShareNavigation(t *testing.T) {
 		t.Errorf("? help missing parameter %q (help=%v)", tabName, help)
 	}
 }
+
+// TestModeSwitchHelpCr 验证按 ? 触发帮助时（缓冲为完整视图名，可能带尾随空格）
+// 都提示 <cr>（用户报告 interface? 与 "interface ?" 结果不一致；? 不会进入编辑缓冲，
+// 因此补全器收到的输入分别是 "interface" 与 "interface "）。
+func TestModeSwitchHelpCr(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "R>", "test")
+	sub := mode.NewCommandMode("interface", "IF#", "interface mode")
+	rootMode.AddSubMode(sub)
+	rootMode.CommandTree.AddModeCommand("interface", "Enter interface mode")
+	sub.AddCommand("shutdown", "Shutdown interface", func(args []string) string { return "" })
+
+	c := NewCommandCompleterWithContext(&mode.CommandContext{
+		CurrentMode: rootMode,
+		Path:        []string{},
+	})
+
+	for _, input := range []string{"interface", "interface "} {
+		got := c.GetCommandTreeSuggestions(input)
+		if len(got) != 1 || got[0] != "<cr>" {
+			t.Errorf("GetCommandTreeSuggestions(%q) = %v, want [<cr>]", input, got)
+		}
+	}
+}

@@ -105,6 +105,20 @@ func (pt *pipeTest) readUntil(target string, timeout time.Duration) (string, err
 	}
 }
 
+// readMorePrompt 读取分页提示并排空整行。net.Pipe 无缓冲，读到 --More-- 后
+// 若留下百分比后缀未读，服务端的整批写入会阻塞，后续按键无法处理。
+func (pt *pipeTest) readMorePrompt() (string, error) {
+	pt.t.Helper()
+	got, err := pt.readUntil("--More--", 3*time.Second)
+	if err != nil {
+		return got, err
+	}
+	if _, err := pt.readUntil("%)", 3*time.Second); err != nil {
+		return got, err
+	}
+	return got, nil
+}
+
 // write 向客户端连接写入数据。
 func (pt *pipeTest) write(data string) error {
 	pt.t.Helper()
@@ -303,14 +317,14 @@ func TestSession_Pagination(t *testing.T) {
 	}
 
 	// 第一页后应出现 --More--
-	if got, err := pt.readUntil("--More--", 3*time.Second); err != nil {
+	if got, err := pt.readMorePrompt(); err != nil {
 		t.Fatalf("did not see first --More--: %v (buf=%q)", err, got)
 	}
 	// 发送 Space 翻到第二页
 	if err := pt.write(" "); err != nil {
 		t.Fatalf("write space failed: %v", err)
 	}
-	if got, err := pt.readUntil("--More--", 3*time.Second); err != nil {
+	if got, err := pt.readMorePrompt(); err != nil {
 		t.Fatalf("did not see second --More--: %v (buf=%q)", err, got)
 	}
 	// 再翻页，应能看到最后一行 L5
@@ -335,7 +349,7 @@ func TestSession_Pagination_QuitWithQ(t *testing.T) {
 	if err := pt.write("list\r\n"); err != nil {
 		t.Fatalf("write list failed: %v", err)
 	}
-	if got, err := pt.readUntil("--More--", 3*time.Second); err != nil {
+	if got, err := pt.readMorePrompt(); err != nil {
 		t.Fatalf("did not see --More--: %v (buf=%q)", err, got)
 	}
 	// 按 q 中止
@@ -726,7 +740,7 @@ func TestSession_Pagination_TwoByteIACBeforeKey(t *testing.T) {
 	if err := pt.write("list\r\n"); err != nil {
 		t.Fatalf("write list failed: %v", err)
 	}
-	if got, err := pt.readUntil("--More--", 3*time.Second); err != nil {
+	if got, err := pt.readMorePrompt(); err != nil {
 		t.Fatalf("did not see --More--: %v (buf=%q)", err, got)
 	}
 	// 先发送一个 2 字节 IAC（NOP），再发送 Space 翻页。

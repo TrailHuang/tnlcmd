@@ -45,6 +45,12 @@ type Session struct {
 	// 仅由 Handle→readLine 所在的单一 goroutine 访问，无需额外加锁。
 	readBuf []byte
 
+	// inputFilter/pendingInput 为三条读取路径共用的输入过滤状态与未消费字节。
+	// editor 为会话级行编辑缓冲，避免每行重新分配。
+	inputFilter  telnetInput
+	pendingInput []byte
+	editor       lineEditor
+
 	// writeErr 记录最近一次写入错误。一旦置位，后续 writerWrite/flushWriter 直接返回该错误，
 	// 主循环据此及时退出，避免向已断开的连接继续写入。
 	writeErr error
@@ -399,7 +405,7 @@ func (s *Session) authenticate(ctx context.Context) bool {
 }
 
 // readPasswordLine 读取一行不回显的密码输入（认证专用）。
-// 与 readLine 共享 Telnet IAC 跳过状态机，但不做历史/补全/帮助处理，
+// 与 readLine 共用 telnetInput 过滤器，但不做历史/补全/帮助处理，
 // 且不回显任何输入字符（服务器已协商 WILL ECHO，由服务端控制回显）。
 func (s *Session) readPasswordLine(prompt string) (string, error) {
 	if err := s.writerWrite(prompt); err != nil {
@@ -410,105 +416,49 @@ func (s *Session) readPasswordLine(prompt string) (string, error) {
 	}
 
 	var buf strings.Builder
-	ps := stNormal
-	seqLen := 0
-
+	s.inputFilter.reset()
 	for {
 		if s.writeErr != nil {
 			return "", s.writeErr
 		}
-		n, err := s.reader.Read(s.readBuf)
-		if err != nil {
-			return "", err
-		}
-		if n == 0 {
-			continue
-		}
 
-		for i := 0; i < n; i++ {
-			b := s.readBuf[i]
-
-			// 未闭合序列超限时回退正常态，避免认证阶段被永久挂起
-			if ps == stNormal {
-				seqLen = 0
-			} else {
-				seqLen++
-				if seqLen > maxSeqLen {
-					ps = stNormal
-					seqLen = 0
-					continue
-				}
-			}
-
-			// 跳过 Telnet 协商与终端转义序列（与 readLine 同一套状态机）
-			switch ps {
-			case stIAC:
-				switch {
-				case isIAC3ByteCmd(b):
-					ps = stIACOpt
-				case b == 0xFA:
-					ps = stSB
-				default:
-					ps = stNormal
-				}
-				continue
-			case stIACOpt:
-				ps = stNormal
-				continue
-			case stSB:
-				if b == 0xFF {
-					ps = stSBIAC
-				}
-				continue
-			case stSBIAC:
-				if b == 0xF0 {
-					ps = stNormal
-				} else {
-					ps = stSB
-				}
-				continue
-			case stESC:
-				if b == '[' {
-					ps = stESCBracket
-				} else {
-					ps = stNormal
-				}
-				continue
-			case stESCBracket:
-				ps = stNormal
-				continue
-			}
-
-			if b == 0xFF { // IAC
-				ps = stIAC
-				continue
-			}
-			if b == 0x1B { // ESC
-				ps = stESC
-				continue
-			}
-
-			switch b {
-			case 0x03, 0x04: // Ctrl+C/D：中止认证
-				return "", io.EOF
-			case 0x7F, 0x08: // Backspace：删除最后字符（不回显）
+		var result string
+		var done bool
+		var eventErr error
+		err := s.readEvents(&s.inputFilter, func(ev inputEvent) bool {
+			switch ev.kind {
+			case evCtrlC, evCtrlD:
+				eventErr = io.EOF
+				return false
+			case evBackspace:
 				if buf.Len() > 0 {
 					current := buf.String()
 					buf.Reset()
 					buf.WriteString(current[:len(current)-1])
 				}
-			case 0x0D, 0x0A: // Enter：提交密码
-				s.writerWrite("\r\n")
-				s.flushWriter()
-				return buf.String(), nil
-			default:
-				if b >= 0x20 && b <= 0x7E {
-					if buf.Len() >= s.maxLineLength() {
-						return "", fmt.Errorf("password exceeds maximum length of %d bytes", s.maxLineLength())
-					}
-					buf.WriteByte(b) // 不回显
+			case evEnter:
+				result = buf.String()
+				done = true
+				return false
+			case evChar:
+				if buf.Len() >= s.maxLineLength() {
+					eventErr = fmt.Errorf("password exceeds maximum length of %d bytes", s.maxLineLength())
+					return false
 				}
+				buf.WriteByte(ev.b) // 不回显
 			}
+			return true
+		})
+		if err != nil {
+			return "", err
+		}
+		if eventErr != nil {
+			return "", eventErr
+		}
+		if done {
+			s.writerWrite("\r\n")
+			s.flushWriter()
+			return result, nil
 		}
 	}
 }
@@ -516,11 +466,17 @@ func (s *Session) readPasswordLine(prompt string) (string, error) {
 // readLine 读取一行输入（支持光标级行编辑：←/→ 移动、Ctrl+A/E 跳行首/行尾、
 // Backspace/Delete 按光标位置删字）
 func (s *Session) readLine() (string, error) {
-	e := &lineEditor{}
-	var historyIndex int = -1
-	// pendingEdit 记录 ESC [ 后的参数字节（'1'/'3'/'4'/'7'/'8'），
-	// 供 stESCTilde 等待终止字节时区分 Home/Delete/End（跨 read 批次保持）
-	var pendingEdit byte
+	// 会话级编辑缓冲复用：reset 只回退长度，底层数组保留容量
+	e := &s.editor
+	e.reset("")
+	historyIndex := -1
+	lineOverflow := false
+	skipNextEnter := false // 超长行拒绝时跳过 CRLF 中的 LF
+
+	// 上一次读取可能停在 CRLF 的 LF 上，直接跳过
+	if len(s.pendingInput) > 0 && s.pendingInput[0] == '\n' {
+		s.pendingInput = s.pendingInput[1:]
+	}
 
 	if s.writeErr != nil {
 		return "", s.writeErr
@@ -534,258 +490,89 @@ func (s *Session) readLine() (string, error) {
 		return "", err
 	}
 
-	// 状态机：跨 read 批次保持解析状态，正确处理变长 IAC / ESC 序列
-	ps := stNormal
-	seqLen := 0           // 当前未完成序列的中间字节数
-	lineOverflow := false // 当前行已超过长度上限，等待回车后重置
-
+	s.inputFilter.reset()
 	for {
 		if s.writeErr != nil {
 			return "", s.writeErr
 		}
 
-		// 复用会话级读缓冲读取，避免每轮分配；data 仅在本次循环内有效
-		n, err := s.reader.Read(s.readBuf)
-		if err != nil {
-			if debuglog.Enabled() {
-				debuglog.Debug("session", "read_error",
-					"remote", s.remoteStr(),
-					"n", n,
-					"state", ps,
-					"err", err)
-			}
-			return "", err
-		}
+		var result string
+		var done bool
+		var eventErr error
 
-		if n == 0 {
-			continue
-		}
-
-		data := s.readBuf[:n]
-
-		if debuglog.Enabled() {
-			debuglog.Debug("session", "input_received",
-				"remote", s.remoteStr(),
-				"n", n,
-				"state", ps,
-				"buffer_len", e.Len(),
-				"cursor", e.cursor,
-				"first_byte_hex", hex.EncodeToString(data[:1]),
-				"prefix_hex", hex.EncodeToString(data[:min(n, 8)]))
-		}
-
-		// 处理接收到的数据
-		for i := 0; i < n; i++ {
-			b := data[i]
-
-			// 未闭合的 Telnet/ANSI 序列超过长度上限时回退到正常态，
-			// 否则后续输入会被状态机永久吞掉
-			if ps == stNormal {
-				seqLen = 0
-			} else {
-				seqLen++
-				if seqLen > maxSeqLen {
-					ps = stNormal
-					seqLen = 0
-					pendingEdit = 0
-					continue
-				}
-			}
-
-			// 优先处理多字节序列状态机
-			switch ps {
-			case stIAC:
-				// b 是 IAC 命令字节
-				switch {
-				case isIAC3ByteCmd(b): // WILL/WONT/DO/DONT → 还需选项字节
-					ps = stIACOpt
-				case b == 0xFA: // SB → 子协商开始
-					ps = stSB
-				default: // 2 字节命令（NOP/GA/AYT/EC/IAC-IAC 等）→ 完成
-					ps = stNormal
-				}
-				continue
-			case stIACOpt:
-				// b 是选项字节，序列完成，丢弃
-				ps = stNormal
-				continue
-			case stSB:
-				// 子协商数据流，跳过直到 IAC
-				if b == 0xFF {
-					ps = stSBIAC
-				}
-				continue
-			case stSBIAC:
-				// 子协商中的 IAC，b==0xF0(SE) 结束，否则继续
-				if b == 0xF0 {
-					ps = stNormal
-				} else {
-					ps = stSB
-				}
-				continue
-			case stESC:
-				if b == '[' {
-					ps = stESCBracket
-				} else {
-					ps = stNormal // 非 '[' 的 ESC 序列，忽略
-				}
-				continue
-			case stESCBracket:
-				ps = stNormal
-				switch b {
-				case 'A': // Up arrow - 浏览更早的历史命令
-					if s.history.Len() == 0 {
-						e.reset("")
-						s.redrawLineCursor(e)
-					} else {
-						if historyIndex < 0 {
-							historyIndex = s.history.Len() - 1
-						} else if historyIndex > 0 {
-							historyIndex--
-						}
-						cmd := s.history.Get(historyIndex)
-						e.reset(cmd)
-						s.redrawLineCursor(e)
-					}
-					continue
-				case 'B': // Down arrow - 浏览更新的历史命令
-					if historyIndex >= 0 && historyIndex < s.history.Len()-1 {
-						historyIndex++
-						cmd := s.history.Get(historyIndex)
-						e.reset(cmd)
-						s.redrawLineCursor(e)
-					} else if historyIndex == s.history.Len()-1 {
-						historyIndex = -1
-						e.reset("")
-						s.redrawLineCursor(e)
-					}
-					continue
-				case 'C': // Right arrow - 光标右移
-					if e.right() {
-						s.redrawLineCursor(e)
-					}
-					continue
-				case 'D': // Left arrow - 光标左移
-					if e.left() {
-						s.redrawLineCursor(e)
-					}
-					continue
-				case 'H': // Home - 跳行首
-					e.home()
-					s.redrawLineCursor(e)
-					continue
-				case 'F': // End - 跳行尾
-					e.end()
-					s.redrawLineCursor(e)
-					continue
-				case '1', '3', '4', '7', '8': // 带参 CSI 序列（1~/3~/4~/7~/8~ 及修饰变体）
-					pendingEdit = b
-					ps = stESCTilde
-					continue
-				default:
-					// 其他 ESC [ X 序列，忽略
-					continue
-				}
-			case stESCTilde:
-				// 等待带参 CSI 序列的终止字节：'~' 触发动作；
-				// 字母终止（如 ESC[1;5D 的 'D'）按对应方向键处理；
-				// 中间字节（';' 与修饰符数字）静默丢弃，继续等待
-				switch {
-				case b == '~':
-					ps = stNormal
-					switch pendingEdit {
-					case '3': // Delete - 删除光标处字符
-						if e.delete() {
-							s.redrawLineCursor(e)
-						}
-					case '1', '7': // Home - 跳行首
-						e.home()
-						s.redrawLineCursor(e)
-					case '4', '8': // End - 跳行尾
-						e.end()
-						s.redrawLineCursor(e)
-					}
-				case (b >= 'A' && b <= 'D') || b == 'H' || b == 'F':
-					ps = stNormal
-					switch b {
-					case 'D': // 如 ESC[1;5D（Ctrl+Left）
-						if e.left() {
-							s.redrawLineCursor(e)
-						}
-					case 'C': // 如 ESC[1;5C（Ctrl+Right）
-						if e.right() {
-							s.redrawLineCursor(e)
-						}
-					}
-				}
-				continue
-			case stUTF8Q1:
-				// 0xEF 后应为 0xBC 才可能是全角问号；否则恢复正常处理
-				if b == 0xBC {
-					ps = stUTF8Q2
-				} else {
-					ps = stNormal
-				}
-				continue
-			case stUTF8Q2:
-				// 0xEF 0xBC 0x9F = 全角问号 '？'（U+FF1F）→ 触发帮助
-				ps = stNormal
-				if b == 0x9F {
-					s.showCommandHelp(e)
-				}
-				continue
-			}
-
-			// stNormal：检测多字节序列开头
-			if b == 0xFF { // IAC
-				ps = stIAC
-				continue
-			}
-			if b == 0x1B { // ESC
-				ps = stESC
-				continue
-			}
-			if b == 0xEF { // UTF-8 多字节序列（如全角问号 '？' = EF BC 9F）
-				ps = stUTF8Q1
-				continue
-			}
-
-			// 单字节命令与可打印字符
-			switch b {
-			case 0x03: // Ctrl+C
-				return "", io.EOF
-			case 0x04: // Ctrl+D
-				return "", io.EOF
-			case 0x01: // Ctrl+A - 光标跳行首
+		err := s.readEvents(&s.inputFilter, func(ev inputEvent) bool {
+			switch ev.kind {
+			case evCtrlC, evCtrlD:
+				eventErr = io.EOF
+				return false
+			case evCtrlA:
 				e.home()
 				s.redrawLineCursor(e)
-			case 0x05: // Ctrl+E - 光标跳行尾
+			case evCtrlE:
 				e.end()
 				s.redrawLineCursor(e)
-			case 0x7F, 0x08: // Backspace - 删除光标前一字符
+			case evBackspace:
 				if e.backspace() {
 					s.redrawLineCursor(e)
 				}
-			case 0x09: // Tab - 命令补全
-				if !s.handleTabCompletion(e) {
-					continue
-				}
-			case 0x3F: // ? - 显示命令提示
+			case evTab:
+				s.handleTabCompletion(e)
+			case evQuestion:
 				s.showCommandHelp(e)
-				continue
-
-			case 0x0D, 0x0A: // Enter
+			case evUp:
+				if s.history.Len() == 0 {
+					e.reset("")
+					s.redrawLineCursor(e)
+				} else {
+					if historyIndex < 0 {
+						historyIndex = s.history.Len() - 1
+					} else if historyIndex > 0 {
+						historyIndex--
+					}
+					e.reset(s.history.Get(historyIndex))
+					s.redrawLineCursor(e)
+				}
+			case evDown:
+				if historyIndex >= 0 && historyIndex < s.history.Len()-1 {
+					historyIndex++
+					e.reset(s.history.Get(historyIndex))
+					s.redrawLineCursor(e)
+				} else if historyIndex == s.history.Len()-1 {
+					historyIndex = -1
+					e.reset("")
+					s.redrawLineCursor(e)
+				}
+			case evLeft:
+				if e.left() {
+					s.redrawLineCursor(e)
+				}
+			case evRight:
+				if e.right() {
+					s.redrawLineCursor(e)
+				}
+			case evHome:
+				e.home()
+				s.redrawLineCursor(e)
+			case evEnd:
+				e.end()
+				s.redrawLineCursor(e)
+			case evDelete:
+				if e.delete() {
+					s.redrawLineCursor(e)
+				}
+			case evEnter:
+				if skipNextEnter {
+					skipNextEnter = false
+					return true
+				}
 				if lineOverflow {
 					s.writerWrite("\r\n% Line too long\r\n" + s.prompt)
 					s.flushWriter()
 					e.reset("")
 					lineOverflow = false
+					skipNextEnter = true
 					historyIndex = -1
-					// CRLF 是两个字节：跳过紧随其后的 LF，避免被当作第二次回车
-					if b == '\r' && i+1 < n && data[i+1] == '\n' {
-						i++
-					}
-					continue
+					return true
 				}
 				if debuglog.Enabled() {
 					debuglog.Debug("session", "input_line_ready",
@@ -793,26 +580,36 @@ func (s *Session) readLine() (string, error) {
 						"line", e.String(),
 						"len", e.Len())
 				}
-				s.writerWrite("\r\n")
-				s.flushWriter()
-				return e.String(), nil
-			default:
-				if b >= 0x20 && b <= 0x7E {
-					if e.Len() >= s.maxLineLength() {
-						lineOverflow = true
-						continue
-					}
-					e.insert(b)
-					if e.cursor == e.Len() {
-						// 光标在行尾：仅回显该字节（匹配旧行为，避免逐键整行重绘）
-						s.writerWrite(string([]byte{b}))
-						s.flushWriter()
-					} else {
-						// 插入到行中：整行重绘并定位光标
-						s.redrawLineCursor(e)
-					}
+				result = e.String()
+				done = true
+				return false
+			case evChar:
+				if e.Len() >= s.maxLineLength() {
+					lineOverflow = true
+					return true
+				}
+				e.insert(ev.b)
+				if e.cursor == e.Len() {
+					// 光标在行尾：仅回显该字节
+					s.writerWrite(string([]byte{ev.b}))
+					s.flushWriter()
+				} else {
+					// 插入到行中：整行重绘并定位光标
+					s.redrawLineCursor(e)
 				}
 			}
+			return true
+		})
+		if err != nil {
+			return "", err
+		}
+		if eventErr != nil {
+			return "", eventErr
+		}
+		if done {
+			s.writerWrite("\r\n")
+			s.flushWriter()
+			return result, nil
 		}
 	}
 }
@@ -987,9 +784,13 @@ func (s *Session) writeResult(result string) error {
 
 		// 每页末尾且非最后一行 → 显示 --More-- 并等待按键
 		if (idx+1)%page == 0 && !isLastLine {
-			percent := (idx + 1) * 100 / len(lines)
-			batch.WriteString(fmt.Sprintf("  --More-- (%d%%)", percent))
+			// 先把本页内容整批写出，再单独写 --More--：提示必须是独立写入，
+			// 便于客户端读到提示时写入已全部完成（也避免 net.Pipe 类客户端阻塞）
 			if err := flushBatch(); err != nil {
+				return err
+			}
+			percent := (idx + 1) * 100 / len(lines)
+			if err := s.writerWrite(fmt.Sprintf("  --More-- (%d%%)", percent)); err != nil {
 				return err
 			}
 			key, err := s.readPagingKey()
@@ -1021,57 +822,38 @@ func (s *Session) writeResult(result string) error {
 //
 // 方向键（ESC [ X）视为"继续翻页"（返回空格的语义）。
 func (s *Session) readPagingKey() (byte, error) {
+	// 跳过命令行 CRLF 遗留的 LF，避免把它当成用户的翻页按键
+	if len(s.pendingInput) > 0 && s.pendingInput[0] == '\n' {
+		s.pendingInput = s.pendingInput[1:]
+	}
+	// 与命令/密码读取共用输入过滤器，IAC、ESC 与长度边界规则完全一致
+	s.inputFilter.reset()
 	for {
-		b, err := s.reader.ReadByte()
+		var key byte
+		var done bool
+		err := s.readEvents(&s.inputFilter, func(ev inputEvent) bool {
+			switch ev.kind {
+			case evCtrlC, evCtrlD:
+				// 原样返回控制字节，交由 writeResult 转为 io.EOF
+				key = ev.b
+				done = true
+				return false
+			case evChar:
+				key = ev.b
+				done = true
+				return false
+			case evEnter, evTab, evQuestion, evUp, evDown, evLeft, evRight, evHome, evEnd, evDelete:
+				key = ' ' // 方向键等功能键视为继续翻页
+				done = true
+				return false
+			}
+			return true
+		})
 		if err != nil {
 			return 0, err
 		}
-		switch b {
-		case 0xFF: // IAC
-			cmd, err := s.reader.ReadByte()
-			if err != nil {
-				return 0, err
-			}
-			switch {
-			case cmd == 0xFA: // SB → 子协商，跳过直到 IAC SE（带长度上限）
-				sbLen := 0
-				for {
-					sb, err := s.reader.ReadByte()
-					if err != nil {
-						return 0, err
-					}
-					sbLen++
-					if sbLen > maxSeqLen {
-						break
-					}
-					if sb != 0xFF {
-						continue
-					}
-					iac, err := s.reader.ReadByte()
-					if err != nil {
-						return 0, err
-					}
-					if iac == 0xF0 { // SE，子协商结束
-						break
-					}
-				}
-			case cmd == 0xFF || (cmd >= 0xF1 && cmd <= 0xF9): // 2 字节命令，无选项字节
-			case cmd >= 0xFB && cmd <= 0xFE: // WILL/WONT/DO/DONT → 还需选项字节
-				if _, err := s.reader.ReadByte(); err != nil {
-					return 0, err
-				}
-			}
-			continue
-		case 0x1B: // ESC，可能是方向键序列 ESC [ X
-			if _, err := s.reader.ReadByte(); err != nil { // 读取 '['
-				return 0, err
-			}
-			if _, err := s.reader.ReadByte(); err != nil { // 读取字母
-				return 0, err
-			}
-			return ' ', nil // 方向键 → 继续翻页
-		default:
-			return b, nil
+		if done {
+			return key, nil
 		}
 	}
 }

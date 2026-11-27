@@ -327,6 +327,12 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 	}
 	tree := c.context.CurrentMode.CommandTree
 
+	// 已输入完整视图名（含尾随空格）时命令即可执行，与精确命中的
+	// ModeSwitch 一致返回 <cr>，而不是展开目标视图的子命令
+	if trailing && node.Type == types.NodeTypeModeSwitch {
+		return []string{"<cr>"}
+	}
+
 	// 最后一个 token 精确命中子节点 → 下钻展示其下一级
 	if !trailing && lastPart != "" {
 		if child, ok := node.Children[lastPart]; ok {
