@@ -1,6 +1,8 @@
 // Copyright 2024 TrailHuang. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+//go:build integration
+
 // Package tnlcmd_test 提供 TNLCMD 库的全面集成测试。
 // 测试覆盖：模块间交互、数据流、异常场景、业务流程、兼容性、性能、安全和回归测试。
 package tnlcmd_test

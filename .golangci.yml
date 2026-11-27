@@ -1,0 +1,6 @@
+run:
+  timeout: 5m
+
+linters:
+  # golangci-lint 默认启用 errcheck、gosimple、govet、ineffassign、staticcheck、unused
+  default: standard

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/TrailHuang/tnlcmd/internal/auditlog"
+	"github.com/TrailHuang/tnlcmd/internal/debuglog"
 	"github.com/TrailHuang/tnlcmd/internal/mode"
 	"github.com/TrailHuang/tnlcmd/internal/server"
 	"github.com/TrailHuang/tnlcmd/pkg/types"
@@ -340,8 +341,8 @@ func (c *CmdLine) Start() error {
 		slog.Warn("failed to initialize audit log file, falling back to stderr", "error", err)
 	}
 
-	// 打印命令树结构（debug级别）
-	if c.rootMode != nil && c.rootMode.CommandTree != nil {
+	// 打印命令树结构（仅调试开启时构建，避免正常启动的额外开销）
+	if debuglog.Enabled() && c.rootMode != nil && c.rootMode.CommandTree != nil {
 		slog.Debug("command tree", "structure", "\n"+c.rootMode.CommandTree.PrintTree())
 	}
 

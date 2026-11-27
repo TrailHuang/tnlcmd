@@ -18,6 +18,8 @@
 - ✅ **连接数限制**: `MaxConnections` 限制最大并发连接数，超限礼貌拒绝
 - ✅ **空闲回收**: `IdleTimeout` 自动回收空闲超时的会话
 - ✅ **密码认证**: 可选密码认证，支持错误次数上限与不回显输入
+- ✅ **输入边界**: `MaxLineLength` 限制单行输入长度，`ReadTimeout` 支持认证后读超时
+- ✅ **调试日志**: `TNLCMD_DEBUG=trace|debug` 输出结构化调试日志，默认关闭零开销
 - ✅ **命令审计日志**: 记录每条命令的远端地址、命令原文、耗时与结果
 - ✅ **审计日志落盘**: 按日期滚动写文件，自动清理过期日志
 - ✅ **零依赖**: 仅使用 Go 标准库（go 1.24+）
@@ -96,7 +98,24 @@ config.AuditLog = true                  // 开启审计（默认输出到 stderr
 config.AuditLogFile = "/var/log/tnlcmd/audit.log" // 落盘（需在 Start 前设置）
 ```
 
-以上配置项均可通过 `SetConfig` 动态设置（如 `SetConfig("auditlog", "true")`）。
+### 输入边界与读超时
+
+```go
+config.MaxLineLength = 4096           // 单行输入与密码的字节上限（0 = 内置默认 4096）
+config.ReadTimeout = 30 * time.Second // 认证后单次读取的超时（0 = 不设置）
+```
+
+超长行在回车时被拒绝（`% Line too long`）并重置编辑缓冲，会话仍可继续使用。
+
+## 动态配置（SetConfig）
+
+所有配置键：`prompt`、`welcome`、`maxhistory`、`port`、`pagesize`、`maxconnections`、`idletimeout`、`password`、`maxauthattempts`、`maxlinelength`、`readtimeout`、`auditlog`、`auditlogfile`。
+
+运行期语义：
+
+- `idletimeout` 是唯一热更新项，运行期修改会立即重建空闲回收周期；
+- `port`、`auditlogfile`、`auditlog` 仅在 Start 前生效，运行中修改会返回错误；
+- 其余键的修改只作用于模板配置，在下次 Start 时生效（活动会话持有启动时的配置快照，互不干扰）。
 
 ### 审计日志落盘规则
 
@@ -194,19 +213,22 @@ cmdline.RegisterContextCommand("run task", "Run a cancellable task", func(ctx co
 
 ## 性能优化
 
-- 连接池管理空闲会话
-- 定期清理过期连接
-- 缓冲区优化减少系统调用
-- 会话级读缓冲复用，避免每轮读取分配
-- 内存高效的历史命令存储
+- 会话级读缓冲与行编辑缓冲复用，避免逐行/逐键分配
+- 分页与命令结果输出按页批量 flush，减少系统调用
+- 空闲回收 goroutine 常驻并按需扫描，阈值可运行期调整
+- 历史命令使用固定容量环形存储，写入 O(1)
+- 命令、密码、分页三条读取路径共用同一 Telnet/ANSI 输入过滤器
 
 ## 测试
 
 ```bash
-go vet ./...           # 静态检查
-go test -race ./...    # 全量并发安全测试（提交前必跑）
-go build ./...         # 编译检查
+make vet        # 静态检查（含集成测试代码）
+make test-fast  # 单元测试（快速验证）
+make test       # 全量并发安全测试，含集成测试（提交前必跑）
+make build      # 编译检查
 ```
+
+等价的原始命令：`go test -race -count=1 -tags integration ./...`（集成测试带 `integration` 构建标签）。
 
 ## 跨平台支持
 

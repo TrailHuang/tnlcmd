@@ -112,10 +112,10 @@ Telnet Client ──TCP──▶ Server.Accept()
 1. 精确匹配 Command / ModeSwitch 节点；
 2. 失败后尝试**唯一前缀匹配**（如 `shu` → `shutdown`，多候选则放弃）；
 3. 再失败则按顺序尝试参数节点（Optional 递归、Enum/Num/String 按值验证）；
-4. 节点带 Handler 但仍有剩余参数时，将剩余参数原样传给 Handler。
+4. 节点带 Handler 但仍有剩余参数时，剩余参数随查找结果一并返回，由会话层数量校验报 `Too many arguments`。
 5. 单 token 输入优先查 `ModeCommands`（含唯一前缀匹配）以支持视图切换。
 
-**元数据来源现状**：`isValidNumberInRange` 优先使用节点结构体字段（`RangeMin/RangeMax`），缺失时回退正则从 `Name` 提取；但 `GetNumberValidationError` / `GetEnumValidationError` / `GetEnumCompletions` 等仍仅从 `Name` 正则提取（详见 §6.1 M1）。
+**元数据来源现状**：参数验证、错误信息与补全已统一基于节点结构体字段（`RangeMin/RangeMax`、`EnumValues`、`EnumRanges`），不再从 `Name` 正则提取（2026-11-26 P1 第 4 项修复，详见 §6.2 M1）。
 
 ### 3.2 视图模式系统
 
@@ -128,7 +128,7 @@ root (privileged EXEC)
 ```
 
 - 每个 `CommandMode` 拥有**独立的 CommandTree**（`mode.NewCommandMode` 中创建）
-- `CommandContext` 维护当前模式和路径（`CurrentMode`, `Path`, `CommandTree`）
+- `CommandContext` 维护当前模式和路径（`CurrentMode`, `Path`；命令树经 `CurrentMode.CommandTree` 访问）
 - `ChangeMode()` 重建模式路径链（从当前模式向上遍历至根）
 - 视图切换命令作为 `NodeTypeModeSwitch` 存储于 `CommandTree.ModeCommands`（**实例级字段**，非全局）
 - `processCommand` 双通道切换：优先走当前模式树的 ModeSwitch 节点；单 token 找不到时回退根模式树；无 Handler 的中间节点若命中子模式名也执行切换
@@ -136,32 +136,33 @@ root (privileged EXEC)
 
 ### 3.3 终端会话处理
 
-- **缓冲复用**: `Session` 持有单个 `*bufio.Reader` / `*bufio.Writer` 实例并全程复用
-- **输入状态机**（`inputState`）: 跨 Read 批次保持解析状态，正确处理变长序列
-  - `stIAC`/`stIACOpt`: 3 字节协商（WILL/WONT/DO/DONT）
-  - 2 字节 IAC（NOP/GA/AYT/EC/EL/IAC-IAC 等，0xF1-0xF9 及 0xFF）直接完成
+- **缓冲复用**: `Session` 持有单个 `*bufio.Reader` / `*bufio.Writer`、会话级 `readBuf` 与 `editor`（行编辑缓冲），全程复用
+- **输入过滤**（`internal/session/inputfilter.go`）: 命令、密码、分页三条读取路径共用 `telnetInput` 过滤器，以事件（`evChar/evEnter/evUp/...`）输出；跨 Read 批次保持解析状态，正确处理变长序列
+  - 2 字节 IAC（NOP/GA/AYT/EC/EL/IAC-IAC 等，0xF1-0xF9 及 0xFF）；`stIACOpt`: 3 字节协商（WILL/WONT/DO/DONT）
   - `stSB`/`stSBIAC`: 子协商数据流，跳过至 IAC SE
-  - `stESC`/`stESCBracket`: `ESC [ A`（上方向）/`ESC [ B`（下方向）历史导航；其他方向键序列忽略（**左右移动未实现**）
+  - `stESC`/`stESCBracket`/`stESCTilde`: 方向键、Home/End、Delete 等光标事件
   - `stUTF8Q1`/`stUTF8Q2`: 全角问号 `？`(EF BC 9F) 等价半角 `?` 触发帮助
-- **Telnet 协商**: 连接建立时发送 `IAC WILL ECHO`, `IAC DO/WILL SUPPRESS_GO_AHEAD`
-- **行编辑**: 退格 → `\r\x1b[K` 清行重绘；Ctrl+C / Ctrl+D → 会话结束（io.EOF）
+  - 未闭合序列超过 64 字节回退正常态（工单 08/11 的长度边界）
+- **Telnet 协商**: 连接建立时发送 `IAC WILL ECHO`, `IAC DO/WILL SUPPRESS_GO_AHEAD`（走统一写入路径）
+- **行编辑**: 光标移动/删除/插入重绘；超长行在回车时提示 `% Line too long` 并重置
 - **写入错误短路**: `writeErr` 记录最近一次写/flush 错误，置位后所有写入直接返回，主循环立即退出会话，避免向死连接持续写入
-- **分页输出**（`writeResult`）: `PageSize > 0` 时按行分页，每页末尾显示 `--More-- (NN%)` 并等待按键（Space/Enter/方向键 → 翻页；`q` → 中止；Ctrl+C → 关闭连接）；`PageSize <= 0` 一次性输出
+- **分页输出**（`writeResult`）: `PageSize > 0` 时按页聚合写入，每页末尾单独写 `--More-- (NN%)` 并等待按键（Space/Enter/方向键 → 翻页；`q` → 中止；Ctrl+C → 关闭连接）；`PageSize <= 0` 一次性输出
+- **读超时**: `ReadTimeout > 0` 时认证后每轮读取前刷新 deadline
 - **换行规范化**: `normalizeLineEndings` 统一将 `\n`/`\r\n` 转为 `\r\n`
 
 ### 3.4 命令历史
 
-- 线程安全（`sync.RWMutex`），切片实现（**非环形缓冲**，容量超限时 `history[1:]` 头部裁剪）
+- 线程安全（`sync.RWMutex`），固定容量环形数组，`Add` 为 O(1)
 - 去重：连续相同命令不重复添加
 - `MaxHistory <= 0` 时禁用历史（Add 即清空）
-- 上下方向键导航，`position = -1` 表示不在历史浏览中（`ResetPosition` 重置）
+- 会话层上/下方向键经 `Get`/`Len` 按逻辑下标导航
 
 ### 3.5 调试日志 (debuglog)
 
 - 默认关闭，`Enabled()` 供热路径短路，零开销
-- `TNLCMD_DEBUG` = off/trace/debug/info/warn/error（默认 off）
-- `TNLCMD_DEBUG_FILE` 指定输出文件（追加模式），为空输出到 stderr
-- 生产日志走 `log/slog`（`slog.Debug/Warn/Error`）；`Config.SetLogger/Logger()` 已定义但当前无调用方
+- `TNLCMD_DEBUG` = off/trace/debug（默认 off）；`info/warn/error` 不是本包级别，视为 off
+- `TNLCMD_DEBUG_FILE` 指定输出文件（追加模式，0600），为空输出到 stderr
+- 生产日志走 `log/slog`；审计输出走注入的专用 logger，不改写全局默认 logger
 
 ---
 
@@ -171,30 +172,42 @@ root (privileged EXEC)
 
 ```go
 type CommandHandler func(args []string) string
+type ContextHandler func(ctx context.Context, args []string) string // 支持 ctx 取消
 
-// Sentinel 返回值（pkg/types）
+// Sentinel 返回值与哨兵错误（pkg/types）
 const (
     SentinelExit       = "__EXIT__"          // 关闭当前连接
     SentinelExitToRoot = "__EXIT_TO_ROOT__"  // 退出到根模式
 )
+var (
+    ErrIncompleteCommand / ErrUnknownCommand / ErrTooFewArguments /
+    ErrTooManyArguments  / ErrInvalidParameterValue        // 均可用 errors.Is 判断
+)
 
 type Config struct {
-    Prompt     string       // 提示符
-    Port       int          // 监听端口
-    WelcomeMsg string       // 欢迎消息
-    MaxHistory int          // 历史记录上限（<=0 禁用）
-    PageSize   int          // 分页大小（行数）；<=0 禁用分页
-    logger     *slog.Logger // 私有字段，经 SetLogger 设置（当前无内部调用方）
+    Prompt, WelcomeMsg string
+    Port               int
+    MaxHistory         int           // <=0 禁用
+    PageSize           int           // <=0 禁用分页
+    MaxConnections     int           // 0 = 不限制
+    IdleTimeout        time.Duration // 0 = 不回收（唯一热更新键）
+    Password           string        // 空 = 关闭认证
+    MaxAuthAttempts    int           // 0 = 内置默认 3
+    MaxLineLength      int           // <=0 = 内置默认 4096
+    ReadTimeout        time.Duration // 0 = 不设置
+    AuditLog           bool
+    AuditLogFile       string
 }
 
-func NewCmdLine(config *Config) *CmdLine                 // config 为 nil 时使用内置默认值
-func DefaultConfig() *Config                             // Prompt=cmdline, Port=2323, MaxHistory=100, PageSize=24
-func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandler, detailedDescription ...string)
-func (c *CmdLine) RegisterModeCommand(modePath, name, description string, handler CommandHandler, detailedDescription ...string)
-func (c *CmdLine) CreateMode(modePath, description string)
-func (c *CmdLine) Start() error                          // 重复启动返回错误
+func NewCmdLine(config *Config) *CmdLine                 // config 为 nil 时使用 DefaultConfig()
+func DefaultConfig() *Config                             // 单一来源：与 NewCmdLine(nil) 共用
+func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandler, detailedDescription ...string) error
+func (c *CmdLine) RegisterContextCommand(name, description string, handler ContextHandler, detailedDescription ...string) error
+func (c *CmdLine) RegisterModeCommand(modePath, name, description string, handler CommandHandler, detailedDescription ...string) error
+func (c *CmdLine) CreateMode(modePath, description string) error
+func (c *CmdLine) Start() error                          // 重复启动返回错误；启动失败回收审计资源
 func (c *CmdLine) Stop() error                           // 未运行返回错误；等待所有会话退出
-func (c *CmdLine) SetConfig(key, value string) error     // key: prompt/welcome/maxhistory/port/pagesize
+func (c *CmdLine) SetConfig(key, value string) error     // 13 个键；运行期语义见 README
 ```
 
 ### 4.2 内部关键类型
@@ -281,24 +294,24 @@ telnet localhost 2323
 | # | 问题 | 位置 | 建议 |
 |---|------|------|------|
 | M1 | **参数元数据双口径**：`isValidNumberInRange` 优先用 `RangeMin/RangeMax` 结构体字段，而 `GetNumberValidationError`/`GetEnumValidationError`/`GetEnumCompletions` 仍从 `Name` 正则重新提取；枚举节点 `Name` 保留 `(on|off)` 原文而 Optional 节点被 trim，提取口径不一 | `command_tree.go:737-897` | 验证与错误信息统一基于结构体字段 |
-| M2 | **错误契约仍为字符串匹配**：`processCommand` 用 `strings.Contains(err.Error(), "incomplete command")` 判断分支，`FindCommand` 错误未导出 sentinel | `session.go:520`, `command_tree.go:367,432` | 定义 `ErrIncompleteCommand` 等 sentinel error |
+| M2 | ✅ **错误契约仍为字符串匹配**（已修复 2026-11-26 P1 第 5 项；2026-11-27 工单 06 扩展）：`ErrIncompleteCommand`/`ErrUnknownCommand`/`ErrTooFewArguments`/`ErrTooManyArguments`/`ErrInvalidParameterValue` 均可 `errors.Is` 判断 | `pkg/types`, `session.go`, `command_tree.go` | — |
 | M3 | ✅ **`Config.RootMode` 仍为 `interface{}`**（已修复 2026-11-26，工单 01） | `types.go:46` | 已删除该字段：根模式在 `NewCmdLine` 内部构造，经 `CmdLine.rootMode` → `CommandContext` → `server.context` 显式传递；server 兜底分支（类型断言）删除，context 缺失时拒绝连接 |
-| M4 | **补全器存在未使用入口与重复逻辑**：`Complete` 与 `GetCompletions` 仅 `includeModeSwitch` 参数不同且生产路径均未调用；生产只使用 `GetNextLevelCompletions`/`GetParameterCompletions`/`GetCommandTreeSuggestions` | `completer.go:122-199,236-253` | 删除或合并死入口 |
+| M4 | ✅ **补全器存在未使用入口与重复逻辑**（已修复：2026-11-26 工单 04 合并入口；2026-11-27 工单 07 统一 Tab/`?` 导航为共享 `walkInput`，工单 12 删除 `CommandNode.GetCompletions`/`ValidateCommand` 死入口） | `completer.go` | — |
 | M5 | ✅ **模式切换双路径**（已修复）：`GetAvailableCommands` 生成的 `createModeChangeHandler`（闭包直接 `ChangeMode`）与 `processCommand` 的 ModeSwitch 树节点分支重复实现切换语义 | `mode.go`, `session.go` | 已收敛为 `CommandContext.EnterMode` 单一实现（ChangeMode + 标准提示消息），两条路径均委托 |
-| M6 | **`SetConfig` 运行期语义不完整**：`port` 修改对已监听服务无效；`prompt` 仅更新 `rootMode`，其他模式及活动会话提示符不刷新（`UpdateAllSessionsPrompt` 未被接线） | `cmdline.go:133-166` | 文档化限制或补全联动 |
+| M6 | ✅ **`SetConfig` 运行期语义不完整**（已修复 2026-11-27 工单 02/03）：配置快照语义（活动会话不受运行期修改影响）、`idletimeout` 唯一热更新、`port`/`auditlogfile`/`auditlog` 运行期修改明确报错、13 个键全部接入并校验 | `cmdline.go` | — |
 | M7 | ✅ **历史非环形缓冲**（已修复）：容量超限时 `history[1:]` 头部裁剪，导致 O(n) 拷贝与底层数组指针漂移 | `history.go` | 已改为固定容量环形数组，覆盖写入 O(1) |
-| M8 | **Handler 无 ctx/超时，Stop 可被慢 Handler 拖住**：`Stop()` 持 `cmdline.mu` 调 `server.Stop()` → `wg.Wait()`，用户 Handler 内 `time.Sleep`/阻塞 I/O 会延迟关闭且无法中断 | `cmdline.go:204-219`, `server.go:76-95` | Handler 增加 ctx 参数；`Stop` 增加超时兜底 |
+| M8 | ✅ **Handler 无 ctx/超时，Stop 可被慢 Handler 拖住**（已修复 2026-11-26 P1 第 6 项）：新增 `ContextHandler` 与 `types.Adapt`；`server.Stop` 5s 超时兜底，`cmdline.Stop` 锁外等待 | `pkg/types`, `server.go`, `session.go` | — |
 
 ### 6.3 一般问题 (Minor)
 
 | # | 问题 | 位置 |
 |---|------|------|
-| m1 | 死代码/无调用方 API：`Config.SetLogger/Logger`、`Session.commands`（仅赋值无读取）、`Session.IsStale`、`cmdline.commands` 平面存储字段、`Complete/GetCompletions/GetCurrentViewCommands`、兼容构造器 `NewTelnetServer/NewSession/NewCommandCompleter/NewCommandCompleterWithTree`（生产路径均走 WithContext 变体） | 多处 |
+| m1 | ✅ **死代码/无调用方 API**（已修复 2026-11-26 P1 第 7 项与 2026-11-27 工单 12）：`Config.SetLogger/Logger`、双命令树与平面命令表、`GetCompletions/ValidateCommand/GetCommandDescription/GetNumberCompletions/GetEnumCompletions/isPlaceholderNode`、`GetAvailableCommands/createModeChangeHandler`、`history.Previous/Next/ResetPosition`、`UpdateAllSessionsPrompt/UpdatePrompt`、`TelnetServer.Listener` 等均已删除 | 多处 |
 | m2 | ✅ **`readLine` 热路径每轮分配**（已修复）：读缓冲提升为会话级 `Session.readBuf`，会话创建时分配一次并全程复用 | `session.go` | 已改为复用缓冲，`BenchmarkReadLine` 24 B/op、2 allocs/op |
-| m3 | `enableTelnetCharacterMode` 直接 `writer.Write+Flush`，绕过 `writeErr` 错误记录 | `session.go:812-831` |
-| m4 | `NodeTypeExit` 已定义但无实现引用 | `types.go:35` |
-| m5 | `minInt` 辅助函数可用 Go 1.21+ 内置 `min` 替代 | `session.go:803-809` |
-| m6 | 测试盲区：`internal/cmdline`、`internal/debuglog`、`pkg/types` 无单元测试；`integration_test.go:737` `NewCommandMode("ROUTER>", ...)` 第一参数（Name）误传了提示符 | `cmdline/`, `debuglog/`, `types/` |
+| m3 | ✅ **`enableTelnetCharacterMode` 绕过 `writeErr`**（已修复 2026-11-27 工单 08）：协商写入改走统一写入路径 | `session.go` | — |
+| m4 | ✅ **`NodeTypeExit` 已定义但无实现引用**（已修复 2026-11-26 P1 第 7 项删除） | `types.go` | — |
+| m5 | ✅ **`minInt` 辅助函数**（已修复 2026-11-26 P1 第 7 项改用内置 `min`） | `session.go` | — |
+| m6 | ✅ **测试盲区**（已修复 2026-11-26/27）：`internal/cmdline`、`internal/debuglog` 均已有单元测试；`pkg/types` 由依赖它的包间接覆盖；集成测试 Name 误传已修正 | `cmdline/`, `debuglog/` | — |
 | m7 | ✅ **安全能力缺失（已全部修复）**：连接数上限、密码认证、空闲回收已实现（`Config.MaxConnections` / `Config.IdleTimeout` / `Config.Password` / `Config.MaxAuthAttempts`，均默认关闭）；TLS 经用户确认剔除本批 | `server.go`, `session.go` |
 | m8 | ✅ **行编辑能力不全（已修复）**：←/→ 光标移动、Ctrl+A/E 跳行首/行尾、Home/End（ESC[H/F 与 ESC[1~/4~/7~/8~）、Delete（ESC[3~）按光标位置删字均已实现；`readLine` 改用 `lineEditor`（字节缓冲+光标），历史回显/Tab 补全后光标复位行尾 | `session.go` |
 | m9 | `append(path, currentArg)` 等切片扩容共享底层数组的写法较隐蔽，当前依赖"newPath 每次 make+copy"保证安全，属脆弱点 | `command_tree.go:417,425` |
@@ -306,6 +319,10 @@ telnet localhost 2323
 ---
 
 ## 7. 优化建议（按优先级排序）
+
+> **2026-11-27 更新**：本轮修复以 `.scratch/code-review-fixes/issues/` 为跟踪载体（审查报告 `CODE_REVIEW.md`）。
+> 工单 01–08、11、12、13 已完成；09（多级视图/带参切换）、10（认证加固/BindAddr）、15（Prometheus 指标）经用户决定废弃，14（文档收敛）为本节同步的最后一张。
+> 以下条目为历史记录，当前状态以工单与 `CODE_REVIEW.md` 修改清单为准。
 
 ### P0 — 立即修复
 
@@ -327,7 +344,7 @@ telnet localhost 2323
 
 9. **安全增强**（m7）：最大连接数、密码认证、可选 TLS、空闲会话回收（接线 `IsStale`）— ✅ 已全部完成（2026-11-26）：工单 05 实现连接数上限（`Config.MaxConnections`，检查+注册同临界区原子完成）与空闲回收（`Config.IdleTimeout`，`Session.IsStale` 判定后锁外关闭）；工单 06 实现可选密码认证（`Config.Password`，空=关闭）——连接先经 `Session.authenticate`（Cisco 风格提示、`readPasswordLine` 不回显、IAC/ESC 状态机跳过、错误 `Config.MaxAuthAttempts` 次（默认 3）后断开、60s 认证读超时防槽位占用），通过后进入 CLI；TLS 确认剔除本批
 10. **行编辑增强**（m8）：左右方向键、Ctrl+A/E、命令别名 — ✅ 光标编辑已完成（2026-11-26，工单 07）：`readLine` 改用 `lineEditor`（字节缓冲 + 光标），支持 ←/→（ESC[C/D）、Ctrl+A/E 跳行首/行尾、Home/End（ESC[H/F 与带参 1~/4~/7~/8~ 变体）、Backspace/Delete（ESC[3~）按光标位置删字、行中插入整行重绘并定位光标（ESC[nD）；历史回显与 Tab 补全后光标复位行尾；新增 7 个集成测试覆盖光标编辑与 IAC 混合输入；命令别名经用户确认剔除本批
-11. **历史环形缓冲**（M7）— ✅ 已完成（2026-11-26，工单 01）：`internal/history` 改为固定容量环形数组（`buf`/`start`/`size`），容量满时覆盖最旧记录并前移起点，`Add` 为 O(1)；`Get`/`GetAll`/`Previous`/`Next` 公共 API 语义保持不变；新增回绕/去重/零容量用例与 `BenchmarkAddOverflow`（满容量写入 ~23 ns/op）；会话层上/下键历史浏览经集成测试验证与改动前一致
+11. **历史环形缓冲**（M7）— ✅ 已完成（2026-11-26，工单 01）：`internal/history` 改为固定容量环形数组（`buf`/`start`/`size`），容量满时覆盖最旧记录并前移起点，`Add` 为 O(1)；`Get`/`GetAll` 公共 API 语义保持不变（`Previous`/`Next`/`ResetPosition` 于 2026-11-27 工单 12 作为无生产调用方 API 删除，会话层经 `Get`/`Len` 导航）；新增回绕/去重/零容量用例与 `BenchmarkAddOverflow`（满容量写入 ~23 ns/op）；会话层上/下键历史浏览经集成测试验证与改动前一致
 12. **收敛模式切换与补全入口**（M4/M5）— ✅ 已全部完成（2026-11-26）：M5（工单 03）新增 `CommandContext.EnterMode`（ChangeMode + `"Entering %s mode\r\n"` 消息）作为模式切换唯一实现路径，`processCommand` 的 ModeSwitch 分支、无 handler 中间节点回退分支与 `createModeChangeHandler` 均委托它；M4 残余（工单 04）—— `completer` 提取共用导航 `walkExact`（`GetNextLevelCompletions`/`GetParameterCompletions` 共享）、合并单调用方冗余层 `describeChildren` → `describeChildrenWithCR`、提取统一展示格式 `formatCandidate`，并新增 `TestProductionPathContracts` 守护三条生产入口（Tab 裸名称回填 / Tab 参数裸参数名 / ? "名称定宽+描述" 展示行）的输出契约
 13. **热路径内存优化**（m2）：复用读缓冲 — ✅ 已完成（2026-11-26，工单 02）：`readLine` 读缓冲提升为会话级字段 `Session.readBuf`（`readBufSize = 1024`），会话创建时分配一次、全程复用；`BenchmarkReadLine` 显示每行 24 B/op、2 allocs/op（不再每轮读取分配 1KB）；IAC/ESC/UTF-8 跨批次状态机用例全部通过
 
@@ -345,42 +362,55 @@ telnet localhost 2323
 
 ```
 tnlcmd/
-├── tnlcmd.go                    # 公共 API 外观层 (67 行)
-├── integration_test.go          # 集成测试 (1690 行)
+├── tnlcmd.go                    # 公共 API 外观层 (83 行)
+├── integration_test.go          # 集成测试 (1802 行，integration 构建标签)
+├── REVIEW.md / CODE_REVIEW.md   # 代码审查报告（CODE_REVIEW.md 为唯一有效版本）
+├── DESIGN_DOC.md / CODE_WIKI.md # 本文档与代码维基
+├── Makefile                     # build/vet/test/test-fast/clean 目标
+├── LICENSE                      # MIT
+├── .github/workflows/ci.yml     # CI（build/vet/test -race + integration 标签）
+├── .golangci.yml                # golangci-lint（默认标准 linter）
 ├── pkg/
 │   └── types/
-│       └── types.go             # 公共类型 + Sentinel 常量 (60 行)
+│       └── types.go             # 公共类型 + Sentinel/哨兵错误 (118 行)
 ├── internal/
+│   ├── auditlog/
+│   │   ├── auditlog.go          # 按日期滚动的审计日志 (237 行)
+│   │   └── auditlog_test.go
 │   ├── cmdline/
-│   │   └── cmdline.go           # 编排层 (242 行)          [无测试]
+│   │   └── cmdline.go           # 编排层 (480 行)
+│   │   └── cmdline_test.go
 │   ├── commandtree/
-│   │   ├── command_tree.go      # Trie 核心 (897 行)
-│   │   └── command_tree_test.go
+│   │   ├── command_tree.go      # Trie 核心 (793 行)
+│   │   ├── placeholder.go       # zebra 占位符 (207 行)
+│   │   └── *_test.go
 │   ├── completer/
-│   │   ├── completer.go         # 补全引擎 (375 行)
-│   │   ├── completer_test.go
-│   │   └── completer_params_test.go
+│   │   ├── completer.go         # 补全引擎 (429 行)
+│   │   └── *_test.go
 │   ├── debuglog/
-│   │   └── debuglog.go          # 环境变量调试日志 (105 行) [无测试]
+│   │   ├── debuglog.go          # 环境变量调试日志 (113 行)
+│   │   └── debuglog_test.go
 │   ├── history/
-│   │   ├── history.go           # 命令历史 (123 行，环形缓冲)
+│   │   ├── history.go           # 命令历史 (89 行，环形缓冲)
 │   │   └── history_test.go
 │   ├── mode/
-│   │   ├── mode.go              # 视图与上下文 (157 行)
+│   │   ├── mode.go              # 视图与上下文 (129 行)
 │   │   └── mode_test.go
 │   ├── server/
-│   │   ├── server.go            # TCP 服务器 (206 行)
+│   │   ├── server.go            # TCP 服务器 (362 行)
 │   │   └── server_test.go
 │   └── session/
-│       ├── session.go           # 终端会话 (909 行)
+│       ├── session.go           # 终端会话 (1143 行)
+│       ├── inputfilter.go       # 共享 Telnet/ANSI 输入过滤器 (244 行)
 │       └── session_test.go
 ├── cmd/
 │   └── zebra_example/
-│       └── zebra_example.go     # Zebra 风格示例 (250 行)
+│       └── zebra_example.go     # Zebra 风格示例
 ├── examples/
 │   └── example/
-│       └── main.go              # 简单示例 (153 行)
+│       └── main.go              # 简单示例
 ├── go.mod                       # go 1.24.9, 零依赖
+├── AGENTS.md
 └── README.md
 ```
 
@@ -388,18 +418,13 @@ tnlcmd/
 
 ## 9. 总结
 
-TNLCMD 是一个架构清晰、功能实用的 Telnet CLI 库。相比早期版本，当前实现已解决全局状态、上下文共享、bufio 复用、魔术字符串、调试日志等核心问题，并新增了输出分页、变长 Telnet IAC 状态机、全角问号支持、唯一前缀匹配、LCP 补全压缩、调试日志等能力，测试覆盖从零提升到约 3.6k 行。
+TNLCMD 是一个架构清晰、功能实用的 Telnet CLI 库。相比早期版本，当前实现已解决全局状态、上下文共享、bufio 复用、魔术字符串、调试日志等核心问题，并新增了输出分页、变长 Telnet IAC 状态机、全角问号支持、唯一前缀匹配、参数补全、审计日志、安全能力、输入边界与读超时等能力。
 
 **主要优势**:
 - 分层架构清晰，包职责分明，零外部依赖
-- 每视图独立命令树 + 实例级 ModeCommands，支持真实的多视图 CLI 体验
-- 输入状态机正确处理变长 Telnet/ANSI/UTF-8 序列
-- 写入错误短路 + WaitGroup 优雅关闭的会话生命周期管理
+- 命令唯一来源：每视图独立 CommandTree（工单 12 移除双命令树）
+- 输入状态机统一为共享过滤器（工单 11），变长 Telnet/ANSI/UTF-8 与长度边界全路径一致
+- 配置快照语义（工单 02）+ 全键校验（工单 03），运行期无配置数据竞争
+- 审计输出走专用 logger（工单 05），不污染进程全局日志
 
-**当前短板**（详见 §6）:
-- ~~`UpdatePrompt` 并发写与 Start 后注册命令的并发安全~~（S1/S2 已修复）
-- ~~分页按键读取与主状态机的 IAC 处理不一致~~（S3 已修复）
-- 参数元数据双口径、字符串错误契约等历史遗留设计债
-- 安全能力（连接数/认证/TLS）与行编辑能力仍欠缺
-
-P0 三个 Critical 已于 2026-11-26 全部修复并通过 `go test -race ./...` 验证。后续按 P1 → P2 → P3 优先级推进，先统一参数元数据与错误契约。
+**2026-11-27 审查轮次**：`.scratch/code-review-fixes/` 工单 01–08、11、12、13 已完成；09（多级视图/带参切换）、10（恒定时间密码比较/退避/BindAddr）、15（Prometheus 指标）经用户决定废弃；14（文档收敛）完成后本节与实现保持同步。细节与逐项证据见 `CODE_REVIEW.md`。

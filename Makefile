@@ -3,7 +3,7 @@
 
 BIN_DIR := bin
 
-.PHONY: all example zebra_example test clean
+.PHONY: all example zebra_example build vet test test-fast clean
 
 ## all: 编译全部示例二进制（默认目标）
 all: example zebra_example
@@ -16,9 +16,21 @@ example:
 zebra_example:
 	go build -o $(BIN_DIR)/zebra_example ./cmd/zebra_example
 
-## test: 运行全部单元测试与集成测试
+## build: 编译检查（不产出二进制）
+build:
+	go build ./...
+
+## vet: 静态检查（含集成测试代码）
+vet:
+	go vet -tags integration ./...
+
+## test: 全量并发安全测试，含集成测试（提交前必跑）
 test:
-	go test ./...
+	go test -race -count=1 -tags integration ./...
+
+## test-fast: 仅单元测试（跳过集成测试，日常快速验证）
+test-fast:
+	go test -race -count=1 ./...
 
 ## clean: 清理编译产物
 clean:

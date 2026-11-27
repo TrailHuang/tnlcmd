@@ -125,9 +125,9 @@ tnlcmd/
 
 包名 `tnlcmd`，是唯一对外的入口。通过**类型别名**与**嵌入式结构体**代理 `internal/cmdline` 的能力，隐藏内部包结构。
 
-- 导出类型：`CmdLine`、`Config`、`CommandHandler`
-- 提供方法：`NewCmdLine`、`RegisterCommand`、`RegisterModeCommand`、`CreateMode`、`Start`、`Stop`、`SetConfig`
-- 提供 `DefaultConfig()` 返回默认配置（端口 2323、MaxHistory 100）
+- 导出类型：`CmdLine`、`Config`、`CommandHandler`、`ContextHandler`；哨兵错误 `ErrIncompleteCommand`/`ErrUnknownCommand`/`ErrTooFewArguments`/`ErrTooManyArguments`/`ErrInvalidParameterValue`（`errors.Is` 判断）
+- 提供方法：`NewCmdLine`、`RegisterCommand`、`RegisterContextCommand`、`RegisterModeCommand`、`CreateMode`、`Start`、`Stop`、`SetConfig`（`Register*`/`CreateMode` 返回 `error`；Start 后调用返回错误）
+- 提供 `DefaultConfig()` 返回默认配置（端口 2323、MaxHistory 100），与 `NewCmdLine(nil)` 共用单一来源
 
 ### 4.2 `pkg/types` — 公共类型
 
@@ -265,14 +265,15 @@ tnlcmd/
 
 | 符号 | 签名 | 说明 |
 |------|------|------|
-| `NewCmdLine` | `(config *Config) *CmdLine` | 创建 CLI 实例，初始化根模式/命令树/上下文 |
-| `(*CmdLine).RegisterCommand` | `(name, description string, handler, detailedDescription ...string)` | 注册命令到根模式 |
-| `(*CmdLine).RegisterModeCommand` | `(modePath, name, description string, handler, detailedDescription ...string)` | 注册命令到指定视图 |
-| `(*CmdLine).CreateMode` | `(modePath, description string)` | 创建新视图 |
-| `(*CmdLine).Start` | `() error` | 启动 Telnet 服务 |
-| `(*CmdLine).Stop` | `() error` | 停止服务 |
-| `(*CmdLine).SetConfig` | `(key, value string) error` | 动态配置（prompt/welcome/maxhistory/port/pagesize） |
-| `DefaultConfig` | `() *Config` | 默认配置 |
+| `NewCmdLine` | `(config *Config) *CmdLine` | 创建 CLI 实例，初始化根模式与上下文；`config` 为 nil 时使用 `DefaultConfig()` |
+| `(*CmdLine).RegisterCommand` | `(name, description string, handler, detailedDescription ...string) error` | 注册命令到根模式（非法参数语法返回错误） |
+| `(*CmdLine).RegisterContextCommand` | `(name, description string, handler ContextHandler, detailedDescription ...string) error` | 注册支持 ctx 取消的命令到根模式 |
+| `(*CmdLine).RegisterModeCommand` | `(modePath, name, description string, handler, detailedDescription ...string) error` | 注册命令到指定视图 |
+| `(*CmdLine).CreateMode` | `(modePath, description string) error` | 创建新视图 |
+| `(*CmdLine).Start` | `() error` | 启动 Telnet 服务（配置快照；失败回收审计资源） |
+| `(*CmdLine).Stop` | `() error` | 停止服务（等待会话退出、审计落盘） |
+| `(*CmdLine).SetConfig` | `(key, value string) error` | 动态配置，13 个键；运行期语义见 README「动态配置」 |
+| `DefaultConfig` | `() *Config` | 默认配置（与 `NewCmdLine(nil)` 共用单一来源） |
 
 ### 5.2 `pkg/types` 关键类型
 

@@ -1,5 +1,8 @@
+# 本地工单与规划
 .scratch/*
-bin/*
-docs/*
-AGENTS.md
-CODE_REVIEW.md
+
+# 编译产物
+bin/
+
+# 日志文件
+*.log
