@@ -268,6 +268,7 @@ func (c *CmdLine) SetConfig(key, value string) error {
 		c.config.IdleTimeout = v
 		// 空闲回收是唯一热更新的配置项：即使服务已启动，也重建回收 ticker
 		if c.isRunning && c.server != nil {
+			// UpdateIdleTimeout 为纯内存原子写，持锁调用安全
 			c.server.UpdateIdleTimeout(v)
 		}
 	case "password":
@@ -330,6 +331,10 @@ func (c *CmdLine) Start() error {
 	// 之后的新 Start 生效。
 	snapshot := *c.config
 	c.isRunning = true
+	// server 创建纳入锁保护（纯内存构造，无阻塞调用），与 Stop 中的读取
+	// 建立 happens-before，消除锁外写读的数据竞争。阻塞的 Start 留在锁外。
+	c.server = server.NewTelnetServerWithContext(&snapshot, c.context)
+	srv := c.server
 	c.mu.Unlock() // 释放锁，避免死锁
 
 	// 注册内置命令（在锁外执行，避免死锁）
@@ -346,22 +351,20 @@ func (c *CmdLine) Start() error {
 		slog.Debug("command tree", "structure", "\n"+c.rootMode.CommandTree.PrintTree())
 	}
 
-	// 创建telnet服务器（传入配置快照），注入审计专用 logger
-	c.server = server.NewTelnetServerWithContext(&snapshot, c.context)
 	c.mu.RLock()
 	auditLogger := c.auditLogger
 	c.mu.RUnlock()
-	c.server.SetAuditLogger(auditLogger)
+	srv.SetAuditLogger(auditLogger)
 
-	// 启动服务器
-	err := c.server.Start()
-	if err != nil {
+	// 启动服务器（持局部引用，锁外执行阻塞的 Listen）
+	if err := srv.Start(); err != nil {
 		// 启动失败必须回收审计资源（文件句柄与后台清理 goroutine）：
 		// 此时 isRunning 即将复位，Stop 会因"未运行"直接返回而不做清理，
 		// 不回收将导致句柄与 goroutine 泄漏
 		c.teardownAuditLogFile()
 		c.mu.Lock()
 		c.isRunning = false
+		c.server = nil
 		c.mu.Unlock()
 		return err
 	}
@@ -439,11 +442,14 @@ func (c *CmdLine) Stop() error {
 		return fmt.Errorf("cmdline is not running")
 	}
 	c.isRunning = false
+	// 持锁读取 server 引用（与 Start 锁内写入配对），锁外仅调用阻塞方法
+	srv := c.server
+	c.server = nil
 	c.mu.Unlock()
 
 	// 锁外等待会话退出：Stop 内部含超时兜底，持锁调用会阻塞其他操作
-	if c.server != nil {
-		c.server.Stop()
+	if srv != nil {
+		srv.Stop()
 	}
 
 	// 会话全部退出后再关闭审计文件，确保最后的审计记录落盘

@@ -67,7 +67,6 @@ func (f *telnetInput) feed(data []byte, emit func(inputEvent) bool) int {
 
 		var ev inputEvent
 		hasEvent := false
-		complete := false
 
 		switch f.state {
 		case stIAC:
@@ -78,33 +77,27 @@ func (f *telnetInput) feed(data []byte, emit func(inputEvent) bool) int {
 				f.state = stSB
 			default: // 2 字节命令
 				f.state = stNormal
-				complete = true
 			}
 		case stIACOpt:
 			f.state = stNormal
-			complete = true
 		case stSB:
 			if b == 0xFF {
 				f.state = stSBIAC
 			}
-			complete = true
 		case stSBIAC:
 			if b == 0xF0 { // SE
 				f.state = stNormal
 			} else {
 				f.state = stSB
 			}
-			complete = true
 		case stESC:
 			if b == '[' {
 				f.state = stESCBracket
 			} else {
 				f.state = stNormal
-				complete = true
 			}
 		case stESCBracket:
 			f.state = stNormal
-			complete = true
 			switch b {
 			case 'A':
 				ev.kind = evUp
@@ -126,7 +119,6 @@ func (f *telnetInput) feed(data []byte, emit func(inputEvent) bool) int {
 			}
 			hasEvent = f.state == stNormal && ev.kind != 0
 		case stESCTilde:
-			complete = true
 			switch {
 			case b == '~':
 				f.state = stNormal
@@ -154,11 +146,9 @@ func (f *telnetInput) feed(data []byte, emit func(inputEvent) bool) int {
 				f.state = stUTF8Q2
 			} else {
 				f.state = stNormal
-				complete = true
 			}
 		case stUTF8Q2:
 			f.state = stNormal
-			complete = true
 			if b == 0x9F { // 全角问号 '？'
 				ev.kind = evQuestion
 				hasEvent = true
@@ -167,17 +157,13 @@ func (f *telnetInput) feed(data []byte, emit func(inputEvent) bool) int {
 			switch {
 			case b == 0xFF:
 				f.state = stIAC
-				complete = true
 			case b == 0x1B:
 				f.state = stESC
-				complete = true
 			case b == 0xEF:
 				f.state = stUTF8Q1
-				complete = true
 			default:
 				ev.b = b
 				hasEvent = true
-				complete = true
 				switch b {
 				case 0x03:
 					ev.kind = evCtrlC
@@ -208,7 +194,6 @@ func (f *telnetInput) feed(data []byte, emit func(inputEvent) bool) int {
 		if hasEvent && !emit(ev) {
 			return i + 1
 		}
-		_ = complete
 	}
 	return len(data)
 }

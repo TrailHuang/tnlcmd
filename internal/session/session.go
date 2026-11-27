@@ -471,9 +471,12 @@ func (s *Session) readLine() (string, error) {
 	e.reset("")
 	historyIndex := -1
 	lineOverflow := false
-	skipNextEnter := false // 超长行拒绝时跳过 CRLF 中的 LF
+	// 超长行拒绝时跳过同批次 CRLF 中的 LF；仅当确认残留字节为 LF 时才跳过，
+	// 避免 LF-only 客户端的真实回车被误吞
+	skipNextEnter := false
 
-	// 上一次读取可能停在 CRLF 的 LF 上，直接跳过
+	// 上一次读取可能停在 CRLF 的 LF 上（evEnter 只消费 \r），直接跳过；
+	// 首字节非 LF 时（如 LF-only 客户端已处理完输入）不做任何预跳过
 	if len(s.pendingInput) > 0 && s.pendingInput[0] == '\n' {
 		s.pendingInput = s.pendingInput[1:]
 	}
@@ -562,8 +565,11 @@ func (s *Session) readLine() (string, error) {
 				}
 			case evEnter:
 				if skipNextEnter {
+					// 仅吞掉 CRLF 残留的 LF；\r 必然是新的回车（CRLF 只可能遗留 \n）
 					skipNextEnter = false
-					return true
+					if ev.b == '\n' {
+						return true
+					}
 				}
 				if lineOverflow {
 					s.writerWrite("\r\n% Line too long\r\n" + s.prompt)
@@ -868,7 +874,9 @@ func (s *Session) validateCommandParameters(node *commandtree.CommandNode, match
 	var paramNodes []*commandtree.CommandNode
 	current := node
 	for current != nil {
-		if current.Type != types.NodeTypeCommand {
+		// 仅参数节点参与校验；命令节点为路径前缀，ModeSwitch 为视图切换节点，
+		// 两者都不是用户参数（后者直接挂 handler 且带多余 token 时会被误计，工单补充）
+		if current.Type != types.NodeTypeCommand && current.Type != types.NodeTypeModeSwitch {
 			// 参数节点
 			paramNodes = append([]*commandtree.CommandNode{current}, paramNodes...) // 插入到开头，保持顺序
 			if current.IsRequired {
