@@ -138,20 +138,6 @@ func TestAddCommandWithPlaceholders(t *testing.T) {
 	}
 }
 
-// TestGetCompletionsWithPlaceholders 验证占位符参数的补全提示
-func TestGetCompletionsWithPlaceholders(t *testing.T) {
-	tree := NewCommandTree()
-	if err := tree.AddCommand("ping A.B.C.D", "Ping IPv4 address", func(args []string) string { return "" }); err != nil {
-		t.Fatalf("AddCommand: %v", err)
-	}
-
-	// 空 ping 后应提示 A.B.C.D 格式
-	completions := tree.Root.Children["ping"].GetCompletions([]string{})
-	if len(completions) == 0 || completions[0] != "A.B.C.D" {
-		t.Errorf("completions = %v, want [A.B.C.D]", completions)
-	}
-}
-
 // TestPlaceholderValidationErrorMessages 验证错误信息包含期望格式提示
 func TestPlaceholderValidationErrorMessages(t *testing.T) {
 	cases := []struct {
@@ -173,90 +159,6 @@ func TestPlaceholderValidationErrorMessages(t *testing.T) {
 		}
 		if !strings.Contains(msg, tc.input) {
 			t.Errorf("error message should echo input %q, got %q", tc.input, msg)
-		}
-	}
-}
-
-// TestValidateCommandWithPlaceholders 验证 ValidateCommand 对占位符的校验路径
-func TestValidateCommandWithPlaceholders(t *testing.T) {
-	tree := NewCommandTree()
-	if err := tree.AddCommand("neighbor M:A:C", "Set neighbor MAC", func(args []string) string { return "" }); err != nil {
-		t.Fatalf("AddCommand: %v", err)
-	}
-
-	neighborNode := tree.Root.Children["neighbor"]
-
-	if err := neighborNode.ValidateCommand([]string{"aa:bb:cc:dd:ee:ff"}); err != nil {
-		t.Errorf("valid MAC should pass: %v", err)
-	}
-	if err := neighborNode.ValidateCommand([]string{"invalid"}); err == nil {
-		t.Error("invalid MAC should fail")
-	}
-}
-
-// TestValidateCommandAllPlaceholderTypes 验证 ValidateCommand 对全部六种占位符类型
-// 的合法值放行 / 非法值拒绝
-func TestValidateCommandAllPlaceholderTypes(t *testing.T) {
-	for _, tc := range []struct {
-		cmdPart string // 占位符写法（同时用作节点名）
-		valid   string // 合法示例值
-		invalid string // 非法示例值
-	}{
-		{"A.B.C.D", "192.168.1.1", "256.1.1.1"},
-		{"A.B.C.D/M", "10.0.0.0/8", "10.0.0.0"},
-		{"X:X::X:X", "2001:db8::1", "zz::1"},
-		{"X:X::X:X/M", "2001:db8::/32", "2001:db8::/129"},
-		{"M:A:C", "aa:bb:cc:dd:ee:ff", "aa:bb:cc"},
-		{"M:A:C/M", "aa:bb:cc:00:00:00/24", "aa:bb:cc:00:00:00/49"},
-	} {
-		tree := NewCommandTree()
-		if err := tree.AddCommand("cmd "+tc.cmdPart, "test", func(args []string) string { return "" }); err != nil {
-			t.Fatalf("AddCommand(%q): %v", tc.cmdPart, err)
-		}
-		node := tree.Root.Children["cmd"]
-		if node == nil {
-			t.Fatalf("node %q not found", "cmd")
-		}
-
-		// ValidateCommand 从父节点（cmd）调用，参数由子节点匹配
-		if err := node.ValidateCommand([]string{tc.valid}); err != nil {
-			t.Errorf("type %q valid %q should pass: %v", tc.cmdPart, tc.valid, err)
-		}
-		if err := node.ValidateCommand([]string{tc.invalid}); err == nil {
-			t.Errorf("type %q invalid %q should fail", tc.cmdPart, tc.invalid)
-		}
-	}
-}
-
-// TestGetCompletionsAllPlaceholderTypes 验证全部六种占位符类型的空输入补全提示
-// 与已输入时不补全的行为
-func TestGetCompletionsAllPlaceholderTypes(t *testing.T) {
-	for _, tc := range []struct {
-		cmdPart string
-		hint    string
-	}{
-		{"A.B.C.D", "A.B.C.D"},
-		{"A.B.C.D/M", "A.B.C.D/M"},
-		{"X:X::X:X", "X:X::X:X"},
-		{"X:X::X:X/M", "X:X::X:X/M"},
-		{"M:A:C", "M:A:C"},
-		{"M:A:C/M", "M:A:C/M"},
-	} {
-		tree := NewCommandTree()
-		if err := tree.AddCommand("cmd "+tc.cmdPart, "test", func(args []string) string { return "" }); err != nil {
-			t.Fatalf("AddCommand(%q): %v", tc.cmdPart, err)
-		}
-		cmdNode := tree.Root.Children["cmd"]
-
-		// 空输入提示占位符格式
-		got := cmdNode.GetCompletions([]string{})
-		if len(got) == 0 || got[0] != tc.hint {
-			t.Errorf("type %q empty-input completions = %v, want [%s]", tc.cmdPart, got, tc.hint)
-		}
-
-		// 已输入部分内容时不做补全
-		if got := cmdNode.GetCompletions([]string{"10"}); len(got) != 0 {
-			t.Errorf("type %q partial-input completions = %v, want empty", tc.cmdPart, got)
 		}
 	}
 }

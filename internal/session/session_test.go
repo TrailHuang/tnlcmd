@@ -757,54 +757,6 @@ func TestSession_Pagination_TwoByteIACBeforeKey(t *testing.T) {
 	}
 }
 
-// TestSession_UpdatePromptConcurrent 验证会话运行期间并发调用 UpdatePrompt
-// 不会引发数据竞争或破坏输出流（-race 下运行）——修复 S1 的回归测试。
-// 修复前 UpdatePrompt 直接写 bufio.Writer，与主循环并发写同一连接。
-func TestSession_UpdatePromptConcurrent(t *testing.T) {
-	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
-	rootMode.AddCommand("echo", "Echo", func(args []string) string {
-		return "RESULT_MARKER\r\n"
-	})
-
-	pt := newPipeTest(t, 0, rootMode)
-	defer pt.close()
-
-	// 会话运行期间从外部 goroutine 并发更新提示符
-	stop := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; ; i++ {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			pt.sess.UpdatePrompt(fmt.Sprintf("P%d_END>", i%3))
-			time.Sleep(time.Millisecond)
-		}
-	}()
-
-	// 期间正常执行命令
-	if err := pt.write("echo\r\n"); err != nil {
-		t.Fatalf("write command failed: %v", err)
-	}
-	if got, err := pt.readUntil("RESULT_MARKER", 3*time.Second); err != nil {
-		t.Fatalf("command failed during concurrent UpdatePrompt: %v (buf=%q)", err, got)
-	}
-	close(stop)
-	wg.Wait()
-
-	// 提示符字段最终被更新为某次调用写入的值
-	pt.sess.mu.RLock()
-	final := pt.sess.prompt
-	pt.sess.mu.RUnlock()
-	if !strings.HasPrefix(final, "P") || !strings.HasSuffix(final, "_END>") {
-		t.Errorf("prompt not updated by UpdatePrompt: %q", final)
-	}
-}
-
 // scriptedConn 是一个同步的内存 net.Conn：按预置脚本返回读取字节、丢弃写入。
 // 用于在单 goroutine 内驱动 readLine，避免 net.Pipe 的并发噪声影响分配测量。
 type scriptedConn struct {

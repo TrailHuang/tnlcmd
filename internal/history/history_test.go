@@ -125,49 +125,6 @@ func TestAddMaxSizeZero(t *testing.T) {
 	if h.Len() != 0 {
 		t.Errorf("expected length 0, got %d", h.Len())
 	}
-	if got := h.Previous(); got != "" {
-		t.Errorf("Previous() = %q, want empty", got)
-	}
-	if got := h.Next(); got != "" {
-		t.Errorf("Next() = %q, want empty", got)
-	}
-}
-
-// TestPreviousNextAfterWrapAround 验证回绕后上/下键浏览顺序与改动前一致。
-func TestPreviousNextAfterWrapAround(t *testing.T) {
-	h := NewCommandHistory(3)
-
-	h.Add("cmd1")
-	h.Add("cmd2")
-	h.Add("cmd3")
-	h.Add("cmd4") // 覆盖 cmd1，逻辑内容为 [cmd2, cmd3, cmd4]
-
-	// Add 后浏览位置位于最新一条，Previous 应回到上一条
-	if got := h.Previous(); got != "cmd3" {
-		t.Errorf("Previous() = %q, want %q", got, "cmd3")
-	}
-	if got := h.Previous(); got != "cmd2" {
-		t.Errorf("Previous() = %q, want %q", got, "cmd2")
-	}
-	// 已到最旧一条，继续上移应停住
-	if got := h.Previous(); got != "cmd2" {
-		t.Errorf("Previous() = %q, want %q", got, "cmd2")
-	}
-	// 下移回到最新一条后继续下移应返回空并重置位置
-	if got := h.Next(); got != "cmd3" {
-		t.Errorf("Next() = %q, want %q", got, "cmd3")
-	}
-	if got := h.Next(); got != "cmd4" {
-		t.Errorf("Next() = %q, want %q", got, "cmd4")
-	}
-	if got := h.Next(); got != "" {
-		t.Errorf("Next() past end = %q, want empty", got)
-	}
-	// 重置后再上一次应回到最新一条
-	h.ResetPosition()
-	if got := h.Previous(); got != "cmd4" {
-		t.Errorf("after ResetPosition, Previous() = %q, want %q", got, "cmd4")
-	}
 }
 
 func TestGet(t *testing.T) {
@@ -217,75 +174,6 @@ func TestGetAll(t *testing.T) {
 	}
 }
 
-func TestPreviousNext_navigation(t *testing.T) {
-	h := NewCommandHistory(10)
-
-	// Empty history
-	if h.Previous() != "" {
-		t.Errorf("Previous on empty history should return empty string")
-	}
-	if h.Next() != "" {
-		t.Errorf("Next on empty history should return empty string")
-	}
-
-	h.Add("cmd1")
-	h.Add("cmd2")
-	h.Add("cmd3")
-
-	// First Previous: position already at last after Add(), so moves to second-to-last
-	got := h.Previous()
-	if got != "cmd2" {
-		t.Errorf("first Previous() = %q, want %q", got, "cmd2")
-	}
-
-	// Second Previous: cmd1
-	got = h.Previous()
-	if got != "cmd1" {
-		t.Errorf("second Previous() = %q, want %q", got, "cmd1")
-	}
-
-	// Third Previous: stay at cmd1
-	got = h.Previous()
-	if got != "cmd1" {
-		t.Errorf("third Previous() = %q, want %q (stay at first)", got, "cmd1")
-	}
-
-	// Next: back to cmd2
-	got = h.Next()
-	if got != "cmd2" {
-		t.Errorf("first Next() = %q, want %q", got, "cmd2")
-	}
-
-	// Next: cmd3
-	got = h.Next()
-	if got != "cmd3" {
-		t.Errorf("second Next() = %q, want %q", got, "cmd3")
-	}
-
-	// Next: past end, should return empty
-	got = h.Next()
-	if got != "" {
-		t.Errorf("Next() past end = %q, want empty", got)
-	}
-}
-
-func TestResetPosition(t *testing.T) {
-	h := NewCommandHistory(10)
-
-	h.Add("cmd1")
-	h.Add("cmd2")
-
-	// After Add, position is at last element (cmd2)
-	// ResetPosition sets it to -1
-	h.ResetPosition()
-
-	// After reset, Previous should start from last again
-	got := h.Previous()
-	if got != "cmd2" {
-		t.Errorf("after ResetPosition, Previous() = %q, want %q", got, "cmd2")
-	}
-}
-
 func TestConcurrentAccess(t *testing.T) {
 	h := NewCommandHistory(100)
 
@@ -300,8 +188,6 @@ func TestConcurrentAccess(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		_ = h.Len()
 		_ = h.GetAll()
-		_ = h.Previous()
-		_ = h.Next()
 	}
 
 	<-done

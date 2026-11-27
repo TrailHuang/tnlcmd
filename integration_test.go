@@ -273,7 +273,6 @@ func TestIntegration_ModeSwitchCommandTreeUpdate(t *testing.T) {
 	it.rootMode.CommandTree.AddModeCommand("configure", "Enter configuration mode")
 
 	// 更新服务器上下文
-	it.context.CommandTree = it.rootMode.CommandTree
 	it.context.CurrentMode = it.rootMode
 
 	it.startServer()
@@ -307,8 +306,6 @@ func TestIntegration_CompleterCommandTreeSync(t *testing.T) {
 	it.rootMode.AddCommand("show", "Show information", func(args []string) string { return "" })
 	it.rootMode.AddCommand("set", "Set configuration", func(args []string) string { return "" })
 	it.rootMode.AddCommand("clear", "Clear data", func(args []string) string { return "" })
-
-	it.context.CommandTree = it.rootMode.CommandTree
 
 	it.startServer()
 	it.connect()
@@ -389,8 +386,6 @@ func TestIntegration_DataFlow_HistoryPersistence(t *testing.T) {
 	it.rootMode.AddCommand("cmd2", "Command 2", func(args []string) string { return "R2\r\n" })
 	it.rootMode.AddCommand("cmd3", "Command 3", func(args []string) string { return "R3\r\n" })
 
-	it.context.CommandTree = it.rootMode.CommandTree
-
 	it.startServer()
 	it.connect()
 	defer it.disconnect()
@@ -440,7 +435,7 @@ func TestIntegration_DataFlow_ParameterValidation(t *testing.T) {
 		MaxHistory: 10,
 		PageSize:   0,
 	}
-	ctx := &mode.CommandContext{CurrentMode: rootMode, CommandTree: rootMode.CommandTree}
+	ctx := &mode.CommandContext{CurrentMode: rootMode}
 	srv := server.NewTelnetServerWithContext(config, ctx)
 	if err := srv.Start(); err != nil {
 		t.Fatalf("server start failed: %v", err)
@@ -512,7 +507,6 @@ func TestIntegration_Exception_EmptyInput(t *testing.T) {
 	defer it.cleanup()
 
 	it.rootMode.AddCommand("test", "Test", func(args []string) string { return "OK\r\n" })
-	it.context.CommandTree = it.rootMode.CommandTree
 
 	it.startServer()
 	it.connect()
@@ -545,7 +539,6 @@ func TestIntegration_Exception_InvalidCommand(t *testing.T) {
 
 	ctx := &mode.CommandContext{
 		CurrentMode: rootMode,
-		CommandTree: rootMode.CommandTree,
 		Path:        []string{},
 	}
 
@@ -611,7 +604,6 @@ func TestIntegration_Exception_IncompleteCommand(t *testing.T) {
 
 	// 添加需要参数的命令
 	it.rootMode.AddCommand("show interface", "Show interface", func(args []string) string { return "OK\r\n" })
-	it.context.CommandTree = it.rootMode.CommandTree
 
 	it.startServer()
 	it.connect()
@@ -644,7 +636,6 @@ func TestIntegration_Exception_TooManyArguments(t *testing.T) {
 	defer it.cleanup()
 
 	it.rootMode.AddCommand("set value <1-10>", "Set value", func(args []string) string { return "OK\r\n" })
-	it.context.CommandTree = it.rootMode.CommandTree
 
 	it.startServer()
 	it.connect()
@@ -680,7 +671,6 @@ func TestIntegration_CommandParameterValidationMatrix(t *testing.T) {
 	it.rootMode.AddCommand("set sw (on | off)", "Set switch", func(args []string) string {
 		return "SW_" + strings.ToUpper(args[0]) + "\r\n"
 	})
-	it.context.CommandTree = it.rootMode.CommandTree
 
 	it.startServer()
 	it.connect()
@@ -736,7 +726,6 @@ func TestIntegration_CommandCompletionParameterLayer(t *testing.T) {
 			it := newIntegrationTest(t)
 			defer it.cleanup()
 			it.rootMode.AddCommand("set debug2 <1-10> (on|off)", "Debug", func(args []string) string { return "OK\r\n" })
-			it.context.CommandTree = it.rootMode.CommandTree
 
 			it.startServer()
 			it.connect()
@@ -785,7 +774,6 @@ func TestIntegration_Exception_CtrlCInterrupt(t *testing.T) {
 		time.Sleep(5 * time.Second)
 		return "DONE\r\n"
 	})
-	it.context.CommandTree = it.rootMode.CommandTree
 
 	it.startServer()
 	it.connect()
@@ -822,7 +810,6 @@ func TestIntegration_Exception_ClientDisconnect(t *testing.T) {
 		time.Sleep(2 * time.Second)
 		return "OK\r\n"
 	})
-	it.context.CommandTree = it.rootMode.CommandTree
 
 	it.startServer()
 	it.connect()
@@ -845,7 +832,6 @@ func TestIntegration_Exception_NetworkTimeout(t *testing.T) {
 	defer it.cleanup()
 
 	it.rootMode.AddCommand("test", "Test", func(args []string) string { return "OK\r\n" })
-	it.context.CommandTree = it.rootMode.CommandTree
 
 	it.startServer()
 	it.connect()
@@ -986,8 +972,6 @@ func TestIntegration_BusinessFlow_ModeHierarchyNavigation(t *testing.T) {
 	// 添加视图切换命令
 	it.rootMode.CommandTree.AddModeCommand("configure", "Enter configure mode")
 	it.rootMode.CommandTree.AddModeCommand("interface", "Enter interface mode")
-
-	it.context.CommandTree = it.rootMode.CommandTree
 
 	it.startServer()
 	it.connect()
@@ -1424,7 +1408,6 @@ func TestIntegration_Security_CommandInjectionPrevention(t *testing.T) {
 
 	ctx := &mode.CommandContext{
 		CurrentMode: rootMode,
-		CommandTree: rootMode.CommandTree,
 		Path:        []string{},
 	}
 
@@ -1509,7 +1492,6 @@ func TestIntegration_Security_BufferOverflowPrevention(t *testing.T) {
 	it.rootMode.AddCommand("echo STRING", "Echo input", func(args []string) string {
 		return fmt.Sprintf("ECHO=%s\r\n", args[0])
 	})
-	it.context.CommandTree = it.rootMode.CommandTree
 
 	it.startServer()
 	it.connect()
@@ -1706,7 +1688,6 @@ func TestIntegration_EdgeCase_UnicodeInput(t *testing.T) {
 	it.rootMode.AddCommand("echo STRING", "Echo input", func(args []string) string {
 		return fmt.Sprintf("ECHO=%s\r\n", args[0])
 	})
-	it.context.CommandTree = it.rootMode.CommandTree
 
 	it.startServer()
 	it.connect()
@@ -1732,7 +1713,6 @@ func TestIntegration_EdgeCase_SpecialCharacters(t *testing.T) {
 	it.rootMode.AddCommand("echo STRING", "Echo input", func(args []string) string {
 		return fmt.Sprintf("ECHO=%s\r\n", args[0])
 	})
-	it.context.CommandTree = it.rootMode.CommandTree
 
 	it.startServer()
 	it.connect()
@@ -1767,7 +1747,6 @@ func TestIntegration_EdgeCase_RapidInput(t *testing.T) {
 	it.rootMode.AddCommand("cmd", "Command", func(args []string) string {
 		return "OK\r\n"
 	})
-	it.context.CommandTree = it.rootMode.CommandTree
 
 	it.startServer()
 	it.connect()

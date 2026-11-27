@@ -113,7 +113,7 @@ func (s *Session) audit(kv ...any) {
 }
 
 // updateCommands 更新提示符与补全器上下文。
-// 写操作持写锁，与外部 goroutine 的 UpdatePrompt 互斥；
+// 写操作持写锁，与读取 context/mode 结构的读锁互斥；
 // 主循环内调用方（processCommand / 初始化）已持有 RLock 时依赖 Go 的 RWLock 不可重入语义，
 // 故本方法不得在持有任何锁的状态下调用。
 func (s *Session) updateCommands() {
@@ -1003,16 +1003,6 @@ func (s *Session) flushWriter() error {
 		return err
 	}
 	return nil
-}
-
-// UpdatePrompt 更新会话的提示符。
-// 会话主循环是 bufio.Writer 与 writeErr 的唯一写入者，因此这里只更新字段，
-// 由主循环在下一轮 readLine 时绘制新提示符；绝不在此处直接写连接（会与主循环并发写）。
-func (s *Session) UpdatePrompt(prompt string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.prompt = prompt
 }
 
 // normalizeLineEndings 规范化换行符，确保使用 \r\n

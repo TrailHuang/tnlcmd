@@ -205,15 +205,3 @@ func getPlaceholderCompletions(nodeType types.CommandNodeType, input string) []s
 		return nil
 	}
 }
-
-// isPlaceholderNode 判断节点是否为占位符参数节点
-func isPlaceholderNode(nodeType types.CommandNodeType) bool {
-	switch nodeType {
-	case types.NodeTypeIPV4, types.NodeTypeIPV4Prefix,
-		types.NodeTypeIPV6, types.NodeTypeIPV6Prefix,
-		types.NodeTypeMAC, types.NodeTypeMACPrefix:
-		return true
-	default:
-		return false
-	}
-}

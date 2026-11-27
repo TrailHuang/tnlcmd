@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/TrailHuang/tnlcmd/internal/auditlog"
-	"github.com/TrailHuang/tnlcmd/internal/commandtree"
 	"github.com/TrailHuang/tnlcmd/internal/mode"
 	"github.com/TrailHuang/tnlcmd/internal/server"
 	"github.com/TrailHuang/tnlcmd/pkg/types"
@@ -26,16 +25,16 @@ type CommandInfo = types.CommandInfo
 // Config 命令行配置
 type Config = types.Config
 
-// CmdLine 命令行接口
+// CmdLine 命令行接口。
+// 命令的唯一来源是各模式的 CommandTree（rootMode.CommandTree 为根视图），
+// 不再有全局命令树与平面命令表（工单 12）。
 type CmdLine struct {
-	config      *Config
-	commands    map[string]CommandInfo   // 向后兼容的平面命令存储
-	commandTree *commandtree.CommandTree // 新的树形命令存储
-	mu          sync.RWMutex
-	server      *server.TelnetServer
-	isRunning   bool
-	rootMode    *mode.CommandMode
-	context     *mode.CommandContext
+	config    *Config
+	mu        sync.RWMutex
+	server    *server.TelnetServer
+	isRunning bool
+	rootMode  *mode.CommandMode
+	context   *mode.CommandContext
 
 	// auditWriter 审计日志文件写入器（AuditLogFile 非空且 Start 成功时非 nil）；
 	// auditLogger 是审计专用 logger，不替换进程全局默认 logger。
@@ -106,9 +105,6 @@ func NewCmdLine(config *Config) *CmdLine {
 	// 创建根模式
 	rootMode := mode.NewCommandMode("root", config.Prompt, "privileged EXEC mode")
 
-	// 创建命令树
-	commandTree := commandtree.NewCommandTree()
-
 	// 创建命令上下文
 	context := &mode.CommandContext{
 		CurrentMode: rootMode,
@@ -116,11 +112,9 @@ func NewCmdLine(config *Config) *CmdLine {
 	}
 
 	return &CmdLine{
-		config:      config,
-		commands:    make(map[string]CommandInfo),
-		commandTree: commandTree,
-		rootMode:    rootMode,
-		context:     context,
+		config:   config,
+		rootMode: rootMode,
+		context:  context,
 	}
 }
 
@@ -134,13 +128,12 @@ func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandl
 		return fmt.Errorf("cannot register command %q after Start: command trees are shared read-only across active sessions", name)
 	}
 
-	// 向后兼容：添加到平面命令存储（包含多行详细描述）
-	c.rootMode.AddCommand(name, description, handler, detailedDescription...)
-
-	// 添加到会话命令树：非法参数语法必须向调用方返回错误
-	if err := c.commandTree.AddCommand(name, description, handler, detailedDescription...); err != nil {
+	// 先注册到命令树：非法参数语法必须向调用方返回错误
+	if err := c.rootMode.CommandTree.AddCommand(name, description, handler, detailedDescription...); err != nil {
 		return fmt.Errorf("register command %q: %w", name, err)
 	}
+	// 再写入平面命令存储（包含多行详细描述，供向后兼容读取）
+	c.rootMode.AddCommand(name, description, handler, detailedDescription...)
 	return nil
 }
 
@@ -156,11 +149,7 @@ func (c *CmdLine) RegisterContextCommand(name, description string, handler types
 		return fmt.Errorf("cannot register command %q after Start: command trees are shared read-only across active sessions", name)
 	}
 
-	// 添加到根模式命令树与会话命令树（与 RegisterCommand 的双树注册保持一致）
 	if err := c.rootMode.CommandTree.AddContextCommand(name, description, handler, detailedDescription...); err != nil {
-		return fmt.Errorf("register context command %q: %w", name, err)
-	}
-	if err := c.commandTree.AddContextCommand(name, description, handler, detailedDescription...); err != nil {
 		return fmt.Errorf("register context command %q: %w", name, err)
 	}
 	return nil
@@ -183,8 +172,7 @@ func (c *CmdLine) findOrCreateMode(modePath string, description string) *mode.Co
 	subMode := mode.NewCommandMode(modeName, prompt, description)
 	currentMode.AddSubMode(subMode)
 
-	// 同时添加到全局命令树和根模式命令树（用于视图切换查找）
-	_ = c.commandTree.AddModeCommand(modeName, fmt.Sprintf("Enter %s configuration mode", modeName))
+	// 添加到根模式命令树（用于视图切换查找）
 	_ = c.rootMode.CommandTree.AddModeCommand(modeName, fmt.Sprintf("Enter %s configuration mode", modeName))
 
 	// 添加退出命令
@@ -353,8 +341,8 @@ func (c *CmdLine) Start() error {
 	}
 
 	// 打印命令树结构（debug级别）
-	if c.commandTree != nil {
-		slog.Debug("command tree", "structure", "\n"+c.commandTree.PrintTree())
+	if c.rootMode != nil && c.rootMode.CommandTree != nil {
+		slog.Debug("command tree", "structure", "\n"+c.rootMode.CommandTree.PrintTree())
 	}
 
 	// 创建telnet服务器（传入配置快照），注入审计专用 logger
@@ -488,7 +476,4 @@ func (c *CmdLine) registerBuiltinCommands() {
 
 	c.rootMode.AddCommand("exit", exitDesc, exitHandler)
 	c.rootMode.AddCommand("quit", exitDesc, exitHandler)
-
-	_ = c.commandTree.AddCommand("exit", exitDesc, exitHandler)
-	_ = c.commandTree.AddCommand("quit", exitDesc, exitHandler)
 }

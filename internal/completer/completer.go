@@ -321,7 +321,7 @@ func (c *CommandCompleter) GetParameterCompletions(input string) []string {
 //   - 输入完整关键字（如 "show"）：返回该命令的下一级候选（子命令或参数）
 //   - 输入部分关键字（如 "sho"）：按前缀匹配返回候选
 func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
-	node, parts, lastPart, trailing := c.resolveNodeForInput(input)
+	node, _, lastPart, trailing := c.resolveNodeForInput(input)
 	if node == nil {
 		return nil
 	}
@@ -386,8 +386,9 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 		}
 	}
 
-	// 根层级附加视图切换命令并去重
-	if node.Type != types.NodeTypeModeSwitch && len(parts) <= 1 {
+	// 根层级附加视图切换命令并去重；仅在导航仍在根节点时追加，
+	// 已下钻进某条命令（如 "clear "）的参数层不应混入视图切换命令
+	if node == tree.Root {
 		modeKeys := tree.GetModeCommandKeys()
 		sort.Strings(modeKeys)
 		for _, key := range modeKeys {

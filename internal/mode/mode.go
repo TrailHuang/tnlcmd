@@ -78,7 +78,6 @@ func (m *CommandMode) AddSubMode(subMode *CommandMode) {
 type CommandContext struct {
 	CurrentMode *CommandMode
 	Path        []string
-	CommandTree *commandtree.CommandTree
 }
 
 // ChangeMode 切换模式
@@ -108,35 +107,7 @@ func (c *CommandContext) Clone() *CommandContext {
 	return &CommandContext{
 		CurrentMode: c.CurrentMode,
 		Path:        path,
-		CommandTree: c.CommandTree,
 	}
-}
-
-// GetAvailableCommands 获取当前模式下可用的命令
-func (c *CommandContext) GetAvailableCommands() map[string]types.CommandInfo {
-	commands := make(map[string]types.CommandInfo)
-
-	// 添加当前模式的命令
-	for name, cmd := range c.CurrentMode.Commands {
-		commands[name] = cmd
-	}
-
-	// 添加所有子模式切换命令（从任意视图都可以切换到其他视图）
-	rootMode := c.GetRootMode()
-	for name, subMode := range rootMode.Children {
-		// 如果当前不是该子模式，则显示切换命令
-		if c.CurrentMode != subMode {
-			commands[name] = types.CommandInfo{
-				Name:        name,
-				Description: fmt.Sprintf("Enter %s configuration mode", subMode.Description),
-				Handler:     c.createModeChangeHandler(subMode),
-			}
-		}
-	}
-
-	//	c.addExitCommands(commands)
-
-	return commands
 }
 
 // GetRootMode 获取根模式
@@ -150,16 +121,9 @@ func (m *CommandContext) GetRootMode() *CommandMode {
 
 // EnterMode 切换到指定模式并返回进入提示消息。
 // 这是模式切换语义的唯一实现路径：processCommand 的 ModeSwitch 树节点分支、
-// 无 handler 中间节点回退分支与 GetAvailableCommands 生成的切换 handler
-// 均委托本方法，确保 ChangeMode 时机与提示消息格式全链路一致。
+// 无 handler 中间节点回退分支均委托本方法，
+// 确保 ChangeMode 时机与提示消息格式全链路一致。
 func (c *CommandContext) EnterMode(newMode *CommandMode) string {
 	c.ChangeMode(newMode)
 	return fmt.Sprintf("Entering %s mode\r\n", newMode.Description)
-}
-
-// createModeChangeHandler 创建模式切换处理函数（委托 EnterMode）
-func (c *CommandContext) createModeChangeHandler(mode *CommandMode) types.CommandHandler {
-	return func(args []string) string {
-		return c.EnterMode(mode)
-	}
 }

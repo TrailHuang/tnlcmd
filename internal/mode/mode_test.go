@@ -149,47 +149,6 @@ func TestEnterMode_UnifiedPath(t *testing.T) {
 	if msg != "Entering configuration mode\r\n" {
 		t.Errorf("EnterMode msg = %q, want %q", msg, "Entering configuration mode\r\n")
 	}
-
-	// GetAvailableCommands 生成的切换 handler 应委托同一实现
-	ctx.ChangeMode(root)
-	handler := ctx.createModeChangeHandler(sub)
-	if got := handler(nil); got != "Entering configuration mode\r\n" {
-		t.Errorf("mode switch handler msg = %q, want %q", got, "Entering configuration mode\r\n")
-	}
-	if ctx.CurrentMode != sub {
-		t.Error("mode switch handler did not switch CurrentMode")
-	}
-}
-
-// TestGetAvailableCommands_IncludesModeSwitch 验证可用命令包含视图切换命令。
-func TestGetAvailableCommands_IncludesModeSwitch(t *testing.T) {
-	root := NewCommandMode("root", "r>", "root")
-	root.AddCommand("show", "Show", func(args []string) string { return "" })
-	sub := NewCommandMode("configure", "c#", "configure")
-	root.AddSubMode(sub)
-
-	ctx := &CommandContext{CurrentMode: root}
-	cmds := ctx.GetAvailableCommands()
-
-	// 应包含根模式自身命令
-	if _, ok := cmds["show"]; !ok {
-		t.Error("available commands should include 'show'")
-	}
-	// 应包含 configure 切换命令
-	info, ok := cmds["configure"]
-	if !ok {
-		t.Fatal("available commands should include 'configure' mode switch")
-	}
-	if info.Handler == nil {
-		t.Error("mode switch handler is nil")
-	}
-
-	// 切换到子模式后，不应再包含自身切换命令
-	ctx.ChangeMode(sub)
-	cmds = ctx.GetAvailableCommands()
-	if _, ok := cmds["configure"]; ok {
-		t.Error("configure should not be listed when already in configure mode")
-	}
 }
 
 // TestClone_DeepCopiesPath 验证 Clone 深拷贝 Path 切片，修改原始 Path 不影响副本。

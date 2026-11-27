@@ -344,3 +344,35 @@ func TestModeSwitchHelpCr(t *testing.T) {
 		}
 	}
 }
+
+// TestHelpParameterLayerNoModeSwitch 验证下钻进命令参数层后，? 帮助不再混入
+// 视图切换命令（用户报告 "clear ?" 列出了 configure/interface）。
+func TestHelpParameterLayerNoModeSwitch(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "R>", "test")
+	sub := mode.NewCommandMode("configure", "C#", "configure")
+	rootMode.AddSubMode(sub)
+	rootMode.CommandTree.AddModeCommand("configure", "Enter configure mode")
+	rootMode.AddCommand("clear test1", "reset test1", func(args []string) string { return "" })
+	rootMode.AddCommand("clear test2", "reset test2", func(args []string) string { return "" })
+
+	c := NewCommandCompleterWithContext(&mode.CommandContext{
+		CurrentMode: rootMode,
+		Path:        []string{},
+	})
+
+	// 命令参数层：只有参数候选，不含视图切换命令
+	got := c.GetCommandTreeSuggestions("clear ")
+	joined := strings.Join(got, "\n")
+	if strings.Contains(joined, "configure") {
+		t.Errorf("parameter layer must not include mode switch commands, got %v", got)
+	}
+	if !strings.Contains(joined, "test1") || !strings.Contains(joined, "test2") {
+		t.Errorf("parameter layer should list test1/test2, got %v", got)
+	}
+
+	// 根层级（空输入）仍应包含视图切换命令
+	got = c.GetCommandTreeSuggestions("")
+	if !strings.Contains(strings.Join(got, "\n"), "configure") {
+		t.Errorf("root level help should include mode switch commands, got %v", got)
+	}
+}

@@ -353,25 +353,10 @@ func (ts *TelnetServer) closeStaleSessions(threshold time.Duration) {
 	}
 }
 
-// UpdateAllSessionsPrompt 更新所有活动会话的提示符
-func (ts *TelnetServer) UpdateAllSessionsPrompt(prompt string) {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-
-	for _, session := range ts.sessions {
-		session.UpdatePrompt(prompt)
-	}
-}
-
 // Addr 返回服务器的监听地址。
 func (ts *TelnetServer) Addr() string {
 	if ts.listener != nil {
 		return ts.listener.Addr().String()
 	}
 	return ""
-}
-
-// Listener 返回监听器。
-func (ts *TelnetServer) Listener() net.Listener {
-	return ts.listener
 }
