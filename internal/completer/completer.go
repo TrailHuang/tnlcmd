@@ -38,20 +38,6 @@ func (c *CommandCompleter) resolveChildren(node *commandtree.CommandNode) map[st
 	return node.Children
 }
 
-// walkExact 从 node 起按精确名连续下钻前 count 个 token；任一层不存在即返回 nil。
-// count 为 0 时不移动（返回 node 本身），为 -1 时同样不移动。
-// GetNextLevelCompletions 与 GetParameterCompletions 共用此导航实现，避免重复遍历逻辑。
-func walkExact(node *commandtree.CommandNode, tokens []string, count int) *commandtree.CommandNode {
-	for i := 0; i < count; i++ {
-		child, exists := node.Children[tokens[i]]
-		if !exists {
-			return nil
-		}
-		node = child
-	}
-	return node
-}
-
 // splitInput 拆分输入并报告末尾是否有空白。尾随空白表示最后一个 token 已输入完成，
 // 这是进入参数层补全的关键信号；strings.Fields 会丢失该信息。
 func splitInput(input string) ([]string, bool) {
