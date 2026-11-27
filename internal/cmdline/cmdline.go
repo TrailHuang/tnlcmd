@@ -175,7 +175,10 @@ func (c *CmdLine) CreateMode(modePath string, description string) error {
 	return nil
 }
 
-// SetConfig 动态设置配置参数
+// SetConfig 动态设置配置参数。
+// 运行期语义（工单 02）：修改只作用于模板配置，在下次 Start 时生效；
+// 已运行的服务与会话持有启动时的配置快照，不受本次修改影响。
+// 这保证并发 SetConfig 与活动会话读配置之间不存在数据竞争。
 func (c *CmdLine) SetConfig(key, value string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -252,6 +255,12 @@ func (c *CmdLine) Start() error {
 		return fmt.Errorf("cmdline is already running")
 	}
 
+	// 持锁对配置取快照：Config 全部为值/字符串字段，浅拷贝即完整副本。
+	// server 与 Session 在整个生命周期内只读这份快照，运行期 SetConfig
+	// 只修改模板配置（c.config），从而消除并发读写同一 *Config 的数据竞争（工单 02）。
+	// 快照语义：本次 Start 生效的配置在启动时固定；SetConfig 的修改对
+	// 之后的新 Start 生效。
+	snapshot := *c.config
 	c.isRunning = true
 	c.mu.Unlock() // 释放锁，避免死锁
 
@@ -260,7 +269,7 @@ func (c *CmdLine) Start() error {
 
 	// 审计日志文件初始化：AuditLog 开启且 AuditLogFile 非空时，
 	// 将 slog 默认 logger 切换为写入按日期滚动的文件（失败则保持 stderr 并告警）
-	if err := c.setupAuditLogFile(); err != nil {
+	if err := c.setupAuditLogFile(&snapshot); err != nil {
 		slog.Warn("failed to initialize audit log file, falling back to stderr", "error", err)
 	}
 
@@ -269,8 +278,8 @@ func (c *CmdLine) Start() error {
 		slog.Debug("command tree", "structure", "\n"+c.commandTree.PrintTree())
 	}
 
-	// 创建telnet服务器
-	c.server = server.NewTelnetServerWithContext(c.config, c.context)
+	// 创建telnet服务器（传入配置快照）
+	c.server = server.NewTelnetServerWithContext(&snapshot, c.context)
 
 	// 启动服务器
 	err := c.server.Start()
@@ -284,7 +293,7 @@ func (c *CmdLine) Start() error {
 		c.mu.Unlock()
 		return err
 	}
-	slog.Info("command line interface started", "port", c.config.Port)
+	slog.Info("command line interface started", "port", snapshot.Port)
 
 	return nil
 }
@@ -292,18 +301,19 @@ func (c *CmdLine) Start() error {
 // setupAuditLogFile 在 Start 时初始化审计日志文件写入器：
 // 创建目录、打开当天文件、启动后台清理 goroutine，并将 slog 默认 logger
 // 切换为文件 TextHandler。AuditLog 关闭或 AuditLogFile 为空时不做任何事。
-func (c *CmdLine) setupAuditLogFile() error {
-	if !c.config.AuditLog || c.config.AuditLogFile == "" {
+// 配置来自 Start 时的快照，与模板配置解耦。
+func (c *CmdLine) setupAuditLogFile(cfg *Config) error {
+	if !cfg.AuditLog || cfg.AuditLogFile == "" {
 		return nil
 	}
 
-	if dir := filepath.Dir(c.config.AuditLogFile); dir != "" && dir != "." {
+	if dir := filepath.Dir(cfg.AuditLogFile); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create audit log dir %s: %w", dir, err)
 		}
 	}
 
-	w, err := auditlog.NewWriter(c.config.AuditLogFile)
+	w, err := auditlog.NewWriter(cfg.AuditLogFile)
 	if err != nil {
 		return err
 	}
@@ -330,7 +340,7 @@ func (c *CmdLine) setupAuditLogFile() error {
 			return a
 		},
 	})))
-	slog.Info("audit log file enabled", "file", c.config.AuditLogFile)
+	slog.Info("audit log file enabled", "file", cfg.AuditLogFile)
 	return nil
 }
 

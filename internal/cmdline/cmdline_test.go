@@ -1,10 +1,12 @@
 package cmdline
 
 import (
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -330,5 +332,135 @@ func TestAuditLogFileNotInitializedWhenDisabled(t *testing.T) {
 	}
 	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
 		t.Errorf("audit log file must not be created when AuditLog is disabled (err=%v)", err)
+	}
+}
+
+// TestSetConfigConcurrentWithLiveSession 回归测试（工单 02）：并发 SetConfig 与
+// 真实连接执行命令不得产生数据竞争。会话持有启动时的配置快照，SetConfig 只写模板，
+// 该测试在 `-race` 下运行——若实现回退为共享同一 *Config 指针将稳定复现 DATA RACE
+// （Session 写结果路径读 PageSize vs SetConfig 写 PageSize）。
+func TestSetConfigConcurrentWithLiveSession(t *testing.T) {
+	c := NewCmdLine(nil)
+	c.config.Port = 0
+	c.config.PageSize = 4
+	if err := c.RegisterCommand("echo", "echo args", func(args []string) string {
+		return fmt.Sprintf("got %d args: %v\r\n", len(args), args)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Stop() }()
+
+	conn, err := net.Dial("tcp", c.server.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// 排空服务端输出，模拟真实客户端持续接收
+	go func() {
+		r := make([]byte, 1)
+		for {
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			if _, err := conn.Read(r); err != nil {
+				return
+			}
+		}
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 3000; i++ {
+			_ = c.SetConfig("pagesize", strconv.Itoa(4+i%3))
+			_ = c.SetConfig("maxhistory", strconv.Itoa(100+i%5))
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if _, err := fmt.Fprint(conn, "echo\r\n"); err != nil {
+			t.Fatalf("write echo failed: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	<-done
+}
+
+// TestSetConfigAfterStartSnapshotSemantics 验证快照语义（工单 02）：
+// Start 后 SetConfig 修改模板成功，但运行中的会话不受影响——
+// 将 PageSize 调为 1 后执行多行输出命令，已建立的会话不出现分页提示。
+func TestSetConfigAfterStartSnapshotSemantics(t *testing.T) {
+	c := NewCmdLine(nil)
+	c.config.Port = 0
+	if err := c.RegisterCommand("three", "three lines", func(args []string) string {
+		return "L1\r\nL2\r\nL3\r\n"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Stop() }()
+
+	addr := c.server.Addr()
+
+	// 建立两个会话（一个在 SetConfig 之前、一个之后），都不应看到分页
+	var conns []net.Conn
+	for i := 0; i < 2; i++ {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conns = append(conns, conn)
+		defer conn.Close()
+
+		if i == 1 {
+			// 会话建立后再修改模板配置：对该会话与前一会话均不应生效
+			if err := c.SetConfig("pagesize", "1"); err != nil {
+				t.Fatalf("SetConfig(pagesize) after Start should succeed: %v", err)
+			}
+			if c.config.PageSize != 1 {
+				t.Errorf("template PageSize = %d, want 1", c.config.PageSize)
+			}
+		}
+	}
+
+	for j, conn := range conns {
+		// 排空欢迎消息与提示符（读到第二个提示符出现即可视为就绪）
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		tmp := make([]byte, 1)
+		var seen strings.Builder
+		for {
+			if _, err := conn.Read(tmp); err != nil {
+				break
+			}
+			seen.WriteByte(tmp[0])
+			// 等待欢迎消息出现，避免把欢迎内容误判为命令输出
+			if strings.Contains(seen.String(), "Welcome to Command Line Interface") {
+				break
+			}
+		}
+
+		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if _, err := fmt.Fprint(conn, "three\r\n"); err != nil {
+			t.Fatalf("conn %d: write command failed: %v", j, err)
+		}
+
+		var out strings.Builder
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for {
+			if _, err := conn.Read(tmp); err != nil {
+				t.Fatalf("conn %d: did not see L3: %v (buf=%q)", j, err, out.String())
+			}
+			out.WriteByte(tmp[0])
+			if strings.Contains(out.String(), "L3") {
+				break
+			}
+		}
+		if strings.Contains(out.String(), "--More--") {
+			t.Errorf("conn %d: live session must not see pagination after SetConfig(pagesize=1), got %q", j, out.String())
+		}
 	}
 }
