@@ -1209,3 +1209,50 @@ func TestValidateCommandParametersSentinels(t *testing.T) {
 		}
 	}
 }
+
+// TestSession_LineLengthLimit 验证超长行在回车时被明确拒绝，且会话仍可继续（工单 08）。
+func TestSession_LineLengthLimit(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	rootMode.AddCommand("ping", "Ping", func(args []string) string { return "PONG\r\n" })
+	pt := newPipeTestWithConfig(t, 0, 10, rootMode, func(cfg *types.Config) {
+		cfg.MaxLineLength = 4
+	})
+	defer pt.close()
+
+	if err := pt.write("xxxxx\r\n"); err != nil {
+		t.Fatalf("write long line failed: %v", err)
+	}
+	out, err := pt.readUntil("% Line too long", 3*time.Second)
+	if err != nil {
+		t.Fatalf("long line was not rejected: %v (buf=%q)", err, out)
+	}
+	// net.Pipe 无缓冲：排空同一批写入中剩余的错误提示与提示符
+	if _, err := pt.readUntil("PROMPT_END>", 3*time.Second); err != nil {
+		t.Fatalf("drain prompt after rejected line failed: %v", err)
+	}
+	if err := pt.write("ping\r\n"); err != nil {
+		t.Fatalf("write command failed: %v", err)
+	}
+	if out, err := pt.readUntil("PONG", 3*time.Second); err != nil {
+		t.Fatalf("session unusable after rejected line: %v (buf=%q)", err, out)
+	}
+}
+
+// TestSession_UnclosedSequenceRecovers 验证未闭合的子协商序列超过长度上限后
+// 回退到正常态，后续命令仍可执行（工单 08）。
+func TestSession_UnclosedSequenceRecovers(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
+	rootMode.AddCommand("ping", "Ping", func(args []string) string { return "PONG\r\n" })
+	pt := newPipeTest(t, 0, rootMode)
+	defer pt.close()
+
+	// IAC SB 后发送远超过 maxSeqLen 的非打印字节，不发 IAC SE
+	payload := "\xff\xfa" + strings.Repeat("\x01", 100) + "ping\r\n"
+	if err := pt.write(payload); err != nil {
+		t.Fatalf("write payload failed: %v", err)
+	}
+	out, err := pt.readUntil("PONG", 3*time.Second)
+	if err != nil {
+		t.Fatalf("session stuck after unclosed SB sequence: %v (buf=%q)", err, out)
+	}
+}

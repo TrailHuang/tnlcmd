@@ -701,3 +701,88 @@ func TestServer_IdleTimeoutReapsSession(t *testing.T) {
 		t.Errorf("server sessions = %d, want 1 (idle session reaped, active kept)", n)
 	}
 }
+
+// TestServer_PasswordTooLongRejected 验证密码输入超过上限时认证失败、连接断开（工单 08）。
+func TestServer_PasswordTooLongRejected(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "SRV>", "test")
+	config := &types.Config{
+		Prompt:        "SRV>",
+		Port:          0,
+		WelcomeMsg:    "WELCOME_MARKER\r\n",
+		Password:      "secret",
+		MaxLineLength: 4,
+	}
+	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
+	srv := NewTelnetServerWithContext(config, ctx)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	conn, err := net.Dial("tcp", srv.listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	readUntilMarker(t, conn, bufio.NewReader(conn), "Password: ")
+
+	conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write([]byte("abcdefghij\r\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	// 超长密码应导致认证失败并关闭连接，而不是收到欢迎消息
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var out strings.Builder
+	tmp := make([]byte, 1)
+	for {
+		if _, err := conn.Read(tmp); err != nil {
+			break
+		}
+		out.WriteByte(tmp[0])
+	}
+	if strings.Contains(out.String(), "WELCOME_MARKER") {
+		t.Errorf("oversized password must not be accepted, got %q", out.String())
+	}
+}
+
+// TestServer_ReadTimeoutClosesIdleSession 验证认证后的会话读超时会关闭连接（工单 08）。
+func TestServer_ReadTimeoutClosesIdleSession(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "SRV>", "test")
+	config := &types.Config{
+		Prompt:      "SRV>",
+		Port:        0,
+		WelcomeMsg:  "WELCOME_MARKER\r\n",
+		ReadTimeout: 200 * time.Millisecond,
+	}
+	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
+	srv := NewTelnetServerWithContext(config, ctx)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	conn, err := net.Dial("tcp", srv.listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	readWelcomeMarker(t, conn, bufio.NewReader(conn), "WELCOME_MARKER")
+
+	// 不再发送任何输入：读超时后服务端应关闭连接
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	tmp := make([]byte, 1)
+	closed := false
+	for {
+		if _, err := conn.Read(tmp); err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				t.Error("session was not closed by read timeout")
+			}
+			closed = true
+			break
+		}
+	}
+	if !closed {
+		t.Error("read timeout should close the idle session")
+	}
+}

@@ -81,6 +81,14 @@ func NewSessionWithContext(conn net.Conn, config *types.Config, context *mode.Co
 	return s
 }
 
+// maxLineLength 返回本会话的单行输入字节上限（0 或未配置时使用默认值）。
+func (s *Session) maxLineLength() int {
+	if s.config.MaxLineLength > 0 {
+		return s.config.MaxLineLength
+	}
+	return defaultMaxLineLength
+}
+
 // SetAuditLogger 注入审计专用 logger。必须在 Handle 启动前调用；
 // nil 表示本会话不输出审计记录。
 func (s *Session) SetAuditLogger(logger *slog.Logger) {
@@ -120,6 +128,13 @@ const defaultMaxAuthAttempts = 3
 // 无限期占用连接槽位（连接数上限场景下尤为危险）。认证成功后清除。
 const authTimeout = 60 * time.Second
 
+// defaultMaxLineLength 未配置 MaxLineLength 时单行输入与密码的字节上限
+const defaultMaxLineLength = 4096
+
+// maxSeqLen 等待 Telnet/ANSI 序列终止字节时的最大中间字节数，
+// 超限后回退到正常输入态，防止未闭合序列永久挂起状态机
+const maxSeqLen = 64
+
 // 认证流程提示与结果消息（Cisco 风格 % 前缀）
 const (
 	authPrompt     = "\r\nUser Access Verification\r\n\r\nPassword: "
@@ -151,6 +166,10 @@ func (s *Session) Handle(ctx context.Context) error {
 		default:
 		}
 
+		// 认证成功后按配置刷新读超时：慢客户端不能无限占用会话槽位
+		if s.config.ReadTimeout > 0 {
+			_ = s.conn.SetReadDeadline(time.Now().Add(s.config.ReadTimeout))
+		}
 		line, err := s.readLine()
 		if err != nil {
 			if debuglog.Enabled() {
@@ -392,6 +411,7 @@ func (s *Session) readPasswordLine(prompt string) (string, error) {
 
 	var buf strings.Builder
 	ps := stNormal
+	seqLen := 0
 
 	for {
 		if s.writeErr != nil {
@@ -407,6 +427,18 @@ func (s *Session) readPasswordLine(prompt string) (string, error) {
 
 		for i := 0; i < n; i++ {
 			b := s.readBuf[i]
+
+			// 未闭合序列超限时回退正常态，避免认证阶段被永久挂起
+			if ps == stNormal {
+				seqLen = 0
+			} else {
+				seqLen++
+				if seqLen > maxSeqLen {
+					ps = stNormal
+					seqLen = 0
+					continue
+				}
+			}
 
 			// 跳过 Telnet 协商与终端转义序列（与 readLine 同一套状态机）
 			switch ps {
@@ -471,6 +503,9 @@ func (s *Session) readPasswordLine(prompt string) (string, error) {
 				return buf.String(), nil
 			default:
 				if b >= 0x20 && b <= 0x7E {
+					if buf.Len() >= s.maxLineLength() {
+						return "", fmt.Errorf("password exceeds maximum length of %d bytes", s.maxLineLength())
+					}
 					buf.WriteByte(b) // 不回显
 				}
 			}
@@ -501,6 +536,8 @@ func (s *Session) readLine() (string, error) {
 
 	// 状态机：跨 read 批次保持解析状态，正确处理变长 IAC / ESC 序列
 	ps := stNormal
+	seqLen := 0           // 当前未完成序列的中间字节数
+	lineOverflow := false // 当前行已超过长度上限，等待回车后重置
 
 	for {
 		if s.writeErr != nil {
@@ -540,6 +577,20 @@ func (s *Session) readLine() (string, error) {
 		// 处理接收到的数据
 		for i := 0; i < n; i++ {
 			b := data[i]
+
+			// 未闭合的 Telnet/ANSI 序列超过长度上限时回退到正常态，
+			// 否则后续输入会被状态机永久吞掉
+			if ps == stNormal {
+				seqLen = 0
+			} else {
+				seqLen++
+				if seqLen > maxSeqLen {
+					ps = stNormal
+					seqLen = 0
+					pendingEdit = 0
+					continue
+				}
+			}
 
 			// 优先处理多字节序列状态机
 			switch ps {
@@ -724,6 +775,18 @@ func (s *Session) readLine() (string, error) {
 				continue
 
 			case 0x0D, 0x0A: // Enter
+				if lineOverflow {
+					s.writerWrite("\r\n% Line too long\r\n" + s.prompt)
+					s.flushWriter()
+					e.reset("")
+					lineOverflow = false
+					historyIndex = -1
+					// CRLF 是两个字节：跳过紧随其后的 LF，避免被当作第二次回车
+					if b == '\r' && i+1 < n && data[i+1] == '\n' {
+						i++
+					}
+					continue
+				}
 				if debuglog.Enabled() {
 					debuglog.Debug("session", "input_line_ready",
 						"remote", s.remoteStr(),
@@ -735,6 +798,10 @@ func (s *Session) readLine() (string, error) {
 				return e.String(), nil
 			default:
 				if b >= 0x20 && b <= 0x7E {
+					if e.Len() >= s.maxLineLength() {
+						lineOverflow = true
+						continue
+					}
 					e.insert(b)
 					if e.cursor == e.Len() {
 						// 光标在行尾：仅回显该字节（匹配旧行为，避免逐键整行重绘）
@@ -896,23 +963,33 @@ func (s *Session) writeResult(result string) error {
 	}
 
 	page := s.config.PageSize
+	// 按页聚合写入，避免逐行 flush 产生多余系统调用
+	var batch strings.Builder
+	flushBatch := func() error {
+		if batch.Len() == 0 {
+			return nil
+		}
+		if err := s.writerWrite(batch.String()); err != nil {
+			return err
+		}
+		batch.Reset()
+		return s.flushWriter()
+	}
+
 	for idx, line := range lines {
 		isLastLine := idx == len(lines)-1
 
-		if err := s.writerWrite(line); err != nil {
-			return err
-		}
+		batch.WriteString(line)
 		// 行尾分隔符：除非这是最后一行且原文无尾随换行
 		if !(isLastLine && !hasTrailingNL) {
-			if err := s.writerWrite("\r\n"); err != nil {
-				return err
-			}
+			batch.WriteString("\r\n")
 		}
 
 		// 每页末尾且非最后一行 → 显示 --More-- 并等待按键
 		if (idx+1)%page == 0 && !isLastLine {
 			percent := (idx + 1) * 100 / len(lines)
-			if err := s.writerWrite(fmt.Sprintf("  --More-- (%d%%)", percent)); err != nil {
+			batch.WriteString(fmt.Sprintf("  --More-- (%d%%)", percent))
+			if err := flushBatch(); err != nil {
 				return err
 			}
 			key, err := s.readPagingKey()
@@ -933,7 +1010,7 @@ func (s *Session) writeResult(result string) error {
 			// Space / Enter / 方向键 / 其他 → 继续下一页
 		}
 	}
-	return nil
+	return flushBatch()
 }
 
 // readPagingKey 在分页提示后读取用户的一个按键，跳过 Telnet IAC 序列与 ANSI 方向键序列。
@@ -956,11 +1033,16 @@ func (s *Session) readPagingKey() (byte, error) {
 				return 0, err
 			}
 			switch {
-			case cmd == 0xFA: // SB → 子协商，跳过直到 IAC SE
+			case cmd == 0xFA: // SB → 子协商，跳过直到 IAC SE（带长度上限）
+				sbLen := 0
 				for {
 					sb, err := s.reader.ReadByte()
 					if err != nil {
 						return 0, err
+					}
+					sbLen++
+					if sbLen > maxSeqLen {
+						break
 					}
 					if sb != 0xFF {
 						continue
@@ -1198,8 +1280,12 @@ func (s *Session) enableTelnetCharacterMode() {
 			"data_hex", hex.EncodeToString(telnetCommands))
 	}
 
-	s.writer.Write(telnetCommands)
-	s.writer.Flush()
+	// 走统一写入路径：写入失败会记入 writeErr 并由主循环短路退出
+	if err := s.writerWrite(string(telnetCommands)); err != nil {
+		if debuglog.Enabled() {
+			debuglog.Debug("session", "telnet_negotiation_failed", "err", err)
+		}
+	}
 }
 
 // handleTabCompletion 处理Tab键补全

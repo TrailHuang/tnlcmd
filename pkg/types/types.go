@@ -95,6 +95,13 @@ type Config struct {
 	// 0 或负数（默认）使用内置默认值 3。
 	MaxAuthAttempts int
 
+	// MaxLineLength 单行输入与密码输入的最大字节数；<=0 使用内置默认 4096。
+	// 超长行在回车时被拒绝并重置，不会无限增长。
+	MaxLineLength int
+
+	// ReadTimeout 认证成功后单次读取的超时；0（默认）不设置读超时。
+	ReadTimeout time.Duration
+
 	// AuditLog 命令审计日志开关；false（默认）表示关闭，行为与未开启时一致。
 	// 开启后每条命令执行完成时经 slog（Info 级）输出结构化审计记录：
 	// 远端地址、命令原文、耗时、成败；密码认证失败事件同样纳入审计。

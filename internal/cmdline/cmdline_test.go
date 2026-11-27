@@ -618,6 +618,8 @@ func TestStartRejectsInvalidConfig(t *testing.T) {
 		{"negative maxconnections", func(c *Config) { c.MaxConnections = -1 }},
 		{"negative idletimeout", func(c *Config) { c.IdleTimeout = -time.Second }},
 		{"negative maxauthattempts", func(c *Config) { c.MaxAuthAttempts = -1 }},
+		{"negative maxlinelength", func(c *Config) { c.MaxLineLength = -1 }},
+		{"negative readtimeout", func(c *Config) { c.ReadTimeout = -time.Second }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -667,6 +669,10 @@ func TestSetConfigAllKeys(t *testing.T) {
 		{"maxauthattempts", "3", false, func(c *Config) bool { return c.MaxAuthAttempts == 3 }},
 		{"maxauthattempts", "-1", true, nil},
 		{"maxauthattempts", "abc", true, nil},
+		{"maxlinelength", "64", false, func(c *Config) bool { return c.MaxLineLength == 64 }},
+		{"maxlinelength", "-1", true, nil},
+		{"readtimeout", "30s", false, func(c *Config) bool { return c.ReadTimeout == 30*time.Second }},
+		{"readtimeout", "5", true, nil},
 		{"auditlog", "true", false, func(c *Config) bool { return c.AuditLog }},
 		{"auditlog", "yes", true, nil},
 		{"auditlogfile", "/tmp/audit.log", false, func(c *Config) bool { return c.AuditLogFile == "/tmp/audit.log" }},

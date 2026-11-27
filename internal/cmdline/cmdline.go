@@ -58,7 +58,12 @@ func DefaultConfig() *Config {
 		IdleTimeout:     0,
 		Password:        "",
 		MaxAuthAttempts: 0,
-		AuditLog:        false,
+
+		// 输入边界默认使用内置值：MaxLineLength=4096，ReadTimeout=0（不设置）
+		MaxLineLength: 0,
+		ReadTimeout:   0,
+
+		AuditLog: false,
 	}
 }
 
@@ -82,6 +87,12 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.IdleTimeout < 0 {
 		return fmt.Errorf("idletimeout must be non-negative, got %s", cfg.IdleTimeout)
+	}
+	if cfg.MaxLineLength < 0 {
+		return fmt.Errorf("maxlinelength must be non-negative, got %d", cfg.MaxLineLength)
+	}
+	if cfg.ReadTimeout < 0 {
+		return fmt.Errorf("readtimeout must be non-negative, got %s", cfg.ReadTimeout)
 	}
 	return nil
 }
@@ -279,6 +290,18 @@ func (c *CmdLine) SetConfig(key, value string) error {
 			return fmt.Errorf("invalid maxauthattempts value %q: must be a non-negative integer", value)
 		}
 		c.config.MaxAuthAttempts = v
+	case "maxlinelength":
+		v, err := strconv.Atoi(value)
+		if err != nil || v < 0 {
+			return fmt.Errorf("invalid maxlinelength value %q: must be a non-negative integer", value)
+		}
+		c.config.MaxLineLength = v
+	case "readtimeout":
+		v, err := time.ParseDuration(value)
+		if err != nil || v < 0 {
+			return fmt.Errorf("invalid readtimeout value %q: must be a non-negative duration like \"30s\"", value)
+		}
+		c.config.ReadTimeout = v
 	case "auditlog":
 		// 仅接受 "true"/"false"（strconv.ParseBool 兼容 "1"/"0"/"t"/"f" 等）
 		v, err := strconv.ParseBool(value)
