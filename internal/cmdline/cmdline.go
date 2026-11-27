@@ -275,6 +275,10 @@ func (c *CmdLine) Start() error {
 	// 启动服务器
 	err := c.server.Start()
 	if err != nil {
+		// 启动失败必须回收审计资源（文件句柄、后台清理 goroutine、全局 logger）：
+		// 此时 isRunning 即将复位，Stop 会因"未运行"直接返回而不做清理，
+		// 不回收将导致句柄与 goroutine 泄漏，且再次 Start 会覆盖 prevLogger
+		c.teardownAuditLogFile()
 		c.mu.Lock()
 		c.isRunning = false
 		c.mu.Unlock()
@@ -307,8 +311,18 @@ func (c *CmdLine) setupAuditLogFile() error {
 		return nil
 	}
 
+	// 字段写入与 teardownAuditLogFile 的读取共用 c.mu，避免 Start/Stop 并发时
+	// 互相覆盖 auditWriter/prevLogger 导致旧 writer 无法关闭
+	c.mu.Lock()
+	if c.auditWriter != nil {
+		// 已有写入器在运行（并发 Stop 尚未回收）——不覆盖，保持可回收性
+		c.mu.Unlock()
+		return nil
+	}
 	c.auditWriter = w
 	c.prevLogger = slog.Default()
+	c.mu.Unlock()
+
 	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {

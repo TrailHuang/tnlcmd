@@ -25,6 +25,7 @@ type TelnetServer struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup // 跟踪活跃的 session goroutine
+	stopping bool           // Stop 已开始：accept 循环不再登记新 goroutine（防 Add/Wait 竞态）
 }
 
 // NewTelnetServerWithContext 创建带上下文的telnet服务器
@@ -66,6 +67,13 @@ const stopTimeout = 5 * time.Second
 
 // Stop 停止telnet服务器
 func (ts *TelnetServer) Stop() {
+	// 先进入停止态：accept 循环在同一把锁下登记 wg.Add，置位后不会再有新登记。
+	// 这保证 Wait 不会与"计数为 0 时的 Add"并发（WaitGroup 契约），也不会漏计
+	// 刚被 Accept 但尚未启动的会话 goroutine。
+	ts.mu.Lock()
+	ts.stopping = true
+	ts.mu.Unlock()
+
 	if ts.cancel != nil {
 		ts.cancel()
 	}
@@ -95,8 +103,28 @@ func (ts *TelnetServer) Stop() {
 	}
 }
 
+// acceptBackoffBase accept 临时错误退避的起始时长
+const acceptBackoffBase = 10 * time.Millisecond
+
+// acceptBackoffMax accept 临时错误退避的封顶时长
+const acceptBackoffMax = 200 * time.Millisecond
+
+// acceptBackoffDelay 按连续失败次数计算 accept 退避时长：
+// 10ms 起步逐次翻倍，封顶 200ms。成功接受连接后由调用方复位计数。
+func acceptBackoffDelay(failures int) time.Duration {
+	d := acceptBackoffBase
+	for i := 1; i < failures && d < acceptBackoffMax; i++ {
+		d *= 2
+	}
+	if d > acceptBackoffMax {
+		d = acceptBackoffMax
+	}
+	return d
+}
+
 // acceptConnections 接受连接
 func (ts *TelnetServer) acceptConnections() {
+	acceptFailures := 0
 	for {
 		select {
 		case <-ts.ctx.Done():
@@ -115,8 +143,23 @@ func (ts *TelnetServer) acceptConnections() {
 			if debuglog.Enabled() {
 				debuglog.Debug("server", "accept_error", "err", err)
 			}
+			// 临时错误（如 EMFILE/ENFILE）退避后重试，避免忙循环
+			acceptFailures++
+			time.Sleep(acceptBackoffDelay(acceptFailures))
 			continue
 		}
+		acceptFailures = 0
+
+		// 在 goroutine 启动之前登记 WaitGroup，并与 Stop 的置停止态共用同一把锁：
+		// 保证 Add 不会与"计数为 0 时的 Wait"并发，Stop 也不会漏计刚接受的连接
+		ts.mu.Lock()
+		if ts.stopping {
+			ts.mu.Unlock()
+			conn.Close()
+			return
+		}
+		ts.wg.Add(1)
+		ts.mu.Unlock()
 
 		go ts.handleConnection(conn)
 	}
@@ -124,7 +167,6 @@ func (ts *TelnetServer) acceptConnections() {
 
 // handleConnection 处理连接
 func (ts *TelnetServer) handleConnection(conn net.Conn) {
-	ts.wg.Add(1)
 	defer ts.wg.Done()
 
 	if debuglog.Enabled() {
@@ -141,15 +183,30 @@ func (ts *TelnetServer) handleConnection(conn net.Conn) {
 		return
 	}
 
+	// 连接数上限预检：注定被拒的连接不创建会话对象
+	ts.mu.RLock()
+	over := ts.config.MaxConnections > 0 && len(ts.sessions) >= ts.config.MaxConnections
+	ts.mu.RUnlock()
+	if over {
+		ts.rejectConnection(conn)
+		return
+	}
+
 	// 每个连接使用独立的上下文副本，避免会话间共享可变状态
 	context := ts.context.Clone()
 
 	// 创建会话
 	session := session.NewSessionWithContext(conn, ts.config, context)
 
-	// 注册会话，并在同一临界区内执行连接数上限检查，
-	// 保证"检查 + 注册"原子性，避免并发连接竞争上限时超发
+	// 注册会话，并在同一临界区内复查停止态与上限：
+	// 预检与注册之间可能有并发连接占满槽位，复查保证"检查 + 注册"原子性不超发；
+	// 停止态下不注册（Stop 已关闭过会话表），由本 goroutine 自行关闭连接
 	ts.mu.Lock()
+	if ts.stopping {
+		ts.mu.Unlock()
+		conn.Close()
+		return
+	}
 	if ts.config.MaxConnections > 0 && len(ts.sessions) >= ts.config.MaxConnections {
 		ts.mu.Unlock()
 		ts.rejectConnection(conn)

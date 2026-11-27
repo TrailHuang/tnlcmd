@@ -496,6 +496,77 @@ func TestServer_NoPasswordBackwardCompat(t *testing.T) {
 	readUntilMarker(t, conn, bufio.NewReader(conn), "PONG")
 }
 
+// TestServer_StopDuringAcceptStorm 验证连接风暴中立即 Stop 的正确性（工单 01）：
+// wg 登记先于 goroutine 启动并受停止态守卫，因此 Stop 返回后每个已被 Accept 的
+// 连接都会被关闭（读到 EOF/错误），服务器内不残留会话，且 -race 下无 WaitGroup 误用。
+func TestServer_StopDuringAcceptStorm(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "SRV>", "test")
+	srv, addr := freeServer(t, "WELCOME_MARKER\r\n", rootMode)
+
+	const total = 20
+	connsCh := make(chan net.Conn, total)
+	var dialWG sync.WaitGroup
+	for i := 0; i < total; i++ {
+		dialWG.Add(1)
+		go func() {
+			defer dialWG.Done()
+			c, err := net.Dial("tcp", addr)
+			if err != nil {
+				t.Errorf("dial failed: %v", err)
+				return
+			}
+			connsCh <- c
+		}()
+	}
+	dialWG.Wait()
+
+	// 所有拨号完成后立即停止：部分连接可能刚被 Accept、尚未完成会话注册
+	srv.Stop()
+
+	// Stop 返回后，所有已建立的连接都应被关闭
+	close(connsCh)
+	for c := range connsCh {
+		c.SetReadDeadline(time.Now().Add(3 * time.Second))
+		tmp := make([]byte, 1)
+		for {
+			if _, err := c.Read(tmp); err != nil {
+				break
+			}
+		}
+		c.Close()
+	}
+
+	// 服务器内不应残留会话
+	srv.mu.RLock()
+	n := len(srv.sessions)
+	srv.mu.RUnlock()
+	if n != 0 {
+		t.Errorf("server sessions = %d after Stop, want 0", n)
+	}
+}
+
+// TestAcceptBackoffDelay 验证 accept 临时错误的退避曲线：10ms 起步逐次翻倍，封顶 200ms。
+func TestAcceptBackoffDelay(t *testing.T) {
+	cases := []struct {
+		failures int
+		want     time.Duration
+	}{
+		{0, 10 * time.Millisecond},
+		{1, 10 * time.Millisecond},
+		{2, 20 * time.Millisecond},
+		{3, 40 * time.Millisecond},
+		{4, 80 * time.Millisecond},
+		{5, 160 * time.Millisecond},
+		{6, 200 * time.Millisecond},
+		{10, 200 * time.Millisecond},
+	}
+	for _, tc := range cases {
+		if got := acceptBackoffDelay(tc.failures); got != tc.want {
+			t.Errorf("acceptBackoffDelay(%d) = %v, want %v", tc.failures, got, tc.want)
+		}
+	}
+}
+
 // TestServer_IdleTimeoutReapsSession 验证空闲超过 IdleTimeout 的会话被服务端主动回收
 // （连接被关闭），而持续活跃的会话不受影响（工单 05）。
 func TestServer_IdleTimeoutReapsSession(t *testing.T) {

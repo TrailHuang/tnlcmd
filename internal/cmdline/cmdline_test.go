@@ -2,6 +2,7 @@ package cmdline
 
 import (
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -249,6 +250,60 @@ func TestAuditLogFileInitializedOnStart(t *testing.T) {
 		if !strings.Contains(string(got), key) {
 			t.Errorf("audit log file missing %q, got: %s", key, got)
 		}
+	}
+}
+
+// TestStartFailureReclaimsAuditResources 验证启动失败（端口被占用）后审计资源被完整回收：
+// 写入器关闭、后台清理 goroutine 退出、全局 logger 还原，且服务可在端口释放后重新启动
+// 并完成审计初始化（工单 01）。
+func TestStartFailureReclaimsAuditResources(t *testing.T) {
+	// 占用一个端口制造 listen 冲突
+	blocker, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("occupy port failed: %v", err)
+	}
+	port := blocker.Addr().(*net.TCPAddr).Port
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+
+	c := NewCmdLine(nil)
+	c.config.Port = port
+	c.config.AuditLog = true
+	c.config.AuditLogFile = logPath
+
+	prev := slog.Default()
+	defer slog.SetDefault(prev)
+
+	if startErr := c.Start(); startErr == nil {
+		t.Fatalf("Start should fail while port %d is occupied", port)
+	}
+
+	// 失败后资源必须已回收
+	c.mu.Lock()
+	leaked := c.auditWriter != nil
+	c.mu.Unlock()
+	if leaked {
+		t.Error("audit writer leaked after failed Start")
+	}
+	if slog.Default() != prev {
+		t.Error("slog default logger must be restored after failed Start")
+	}
+
+	// 释放端口后同一实例可重新启动，审计文件正常初始化
+	if err := blocker.Close(); err != nil {
+		t.Fatalf("release port failed: %v", err)
+	}
+	c.config.Port = 0
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start after failed attempt should succeed: %v", err)
+	}
+	if slog.Default() == prev {
+		t.Error("slog default logger should point to audit file after successful restart")
+	}
+	_ = c.Stop()
+	if slog.Default() != prev {
+		t.Error("slog default logger must be restored after Stop")
 	}
 }
 
