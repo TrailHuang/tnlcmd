@@ -56,6 +56,12 @@ const (
 	NodeTypeNum                               // 数值范围节点 <>
 	NodeTypeString                            // 字符串参数节点（大写字母）
 	NodeTypeModeSwitch                        // 视图切换节点
+	NodeTypeIPV4                              // IPv4 地址节点 A.B.C.D
+	NodeTypeIPV4Prefix                        // IPv4 前缀节点 A.B.C.D/M
+	NodeTypeIPV6                              // IPv6 地址节点 X:X::X:X
+	NodeTypeIPV6Prefix                        // IPv6 前缀节点 X:X::X:X/M
+	NodeTypeMAC                               // MAC 地址节点 M:A:C
+	NodeTypeMACPrefix                         // MAC 前缀节点 M:A:C/M
 )
 
 // Config 命令行配置

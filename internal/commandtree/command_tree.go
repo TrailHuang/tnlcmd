@@ -21,6 +21,12 @@ const (
 	NodeTypeNum                        = types.NodeTypeNum        // 数值范围节点 <>
 	NodeTypeString                     = types.NodeTypeString     // 字符串参数节点（大写字母）
 	NodeTypeModeSwitch                 = types.NodeTypeModeSwitch // 视图切换命令节点
+	NodeTypeIPV4                       = types.NodeTypeIPV4       // IPv4 地址节点 A.B.C.D
+	NodeTypeIPV4Prefix                 = types.NodeTypeIPV4Prefix // IPv4 前缀节点 A.B.C.D/M
+	NodeTypeIPV6                       = types.NodeTypeIPV6       // IPv6 地址节点 X:X::X:X
+	NodeTypeIPV6Prefix                 = types.NodeTypeIPV6Prefix // IPv6 前缀节点 X:X::X:X/M
+	NodeTypeMAC                        = types.NodeTypeMAC        // MAC 地址节点 M:A:C
+	NodeTypeMACPrefix                  = types.NodeTypeMACPrefix  // MAC 前缀节点 M:A:C/M
 )
 
 // CommandNode 命令树节点
@@ -227,6 +233,11 @@ func (t *CommandTree) parseCommandPart(part string) (*CommandNode, error) {
 				return node, nil
 			}
 		}
+	}
+
+	// 占位符参数（A.B.C.D / X:X::X:X / M:A:C 等）
+	if node, ok := parsePlaceholderParam(part); ok {
+		return node, nil
 	}
 
 	// 字符串参数（全大写字母）
@@ -482,6 +493,13 @@ func (n *CommandNode) GetCompletions(args []string) []string {
 			// 可选参数：同时考虑包含和不包含的情况
 			completions = append(completions, child.GetCompletions(args)...)
 			completions = append(completions, child.GetCompletions(remainingArgs)...)
+		case NodeTypeIPV4, NodeTypeIPV4Prefix,
+			NodeTypeIPV6, NodeTypeIPV6Prefix,
+			NodeTypeMAC, NodeTypeMACPrefix:
+			// 占位符参数：空输入时给出格式提示
+			if len(remainingArgs) == 0 {
+				completions = append(completions, getPlaceholderCompletions(child.Type, currentArg)...)
+			}
 		}
 	}
 
@@ -535,6 +553,14 @@ func (n *CommandNode) ValidateCommand(args []string) error {
 			// 可选参数：尝试验证，如果失败则跳过
 			if err := child.ValidateCommand(args); err == nil {
 				return nil
+			}
+			return child.ValidateCommand(remainingArgs)
+		case NodeTypeIPV4, NodeTypeIPV4Prefix,
+			NodeTypeIPV6, NodeTypeIPV6Prefix,
+			NodeTypeMAC, NodeTypeMACPrefix:
+			// 占位符参数：校验值格式后继续验证剩余参数
+			if !isPlaceholderValue(child.Type, currentArg) {
+				return fmt.Errorf("%s", GetPlaceholderValidationError(child.Type, currentArg))
 			}
 			return child.ValidateCommand(remainingArgs)
 		}
@@ -666,6 +692,18 @@ func getNodeTypeString(nodeType CommandNodeType) string {
 		return "Range"
 	case NodeTypeString:
 		return "String"
+	case NodeTypeIPV4:
+		return "IPV4"
+	case NodeTypeIPV4Prefix:
+		return "IPV4_PREFIX"
+	case NodeTypeIPV6:
+		return "IPV6"
+	case NodeTypeIPV6Prefix:
+		return "IPV6_PREFIX"
+	case NodeTypeMAC:
+		return "MAC"
+	case NodeTypeMACPrefix:
+		return "MAC_PREFIX"
 	default:
 		return "Unknown"
 	}
@@ -690,6 +728,10 @@ func IsParameterMatch(node *CommandNode, input string) bool {
 		if isString(input) {
 			return true
 		}
+	case NodeTypeIPV4, NodeTypeIPV4Prefix,
+		NodeTypeIPV6, NodeTypeIPV6Prefix,
+		NodeTypeMAC, NodeTypeMACPrefix: // 占位符参数，按类型校验格式
+		return isPlaceholderValue(node.Type, input)
 	default:
 		// 默认情况下，如果参数名包含输入，则认为匹配
 		return false

@@ -1041,6 +1041,10 @@ func (s *Session) getParameterValidationError(node *commandtree.CommandNode, inp
 		return commandtree.GetEnumValidationError(node, input)
 	case types.NodeTypeNum:
 		return commandtree.GetNumberValidationError(node, input)
+	case types.NodeTypeIPV4, types.NodeTypeIPV4Prefix,
+		types.NodeTypeIPV6, types.NodeTypeIPV6Prefix,
+		types.NodeTypeMAC, types.NodeTypeMACPrefix:
+		return commandtree.GetPlaceholderValidationError(node.Type, input)
 	default:
 		return fmt.Sprintf("无效的参数值: '%s'", input)
 	}

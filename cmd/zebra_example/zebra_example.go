@@ -68,6 +68,13 @@ func main() {
 		{"set name STRING", "Debugging functions", "set name\nconfigure name", setValueHandler},
 		{"set filter-switch (on|off)", "Debugging functions", "set filter\nconfigure filter switch", setValueHandler},
 		{"set test [STRRING]", "Debugging functions", "set test\nconfigure test", setValueHandler},
+		// 占位符参数示例：网络设备风格的数据类型校验
+		{"set gateway A.B.C.D", "Set gateway IPv4 address", "set gateway\nconfigure gateway ipv4", placeholderHandler},
+		{"set network A.B.C.D/M", "Set IPv4 network prefix", "set network\nconfigure ipv4 prefix", placeholderHandler},
+		{"set nexthop6 X:X::X:X", "Set IPv6 next-hop address", "set nexthop6\nconfigure ipv6 address", placeholderHandler},
+		{"set network6 X:X::X:X/M", "Set IPv6 network prefix", "set network6\nconfigure ipv6 prefix", placeholderHandler},
+		{"set neighbor M:A:C", "Set neighbor MAC address", "set neighbor\nconfigure mac address", placeholderHandler},
+		{"set vlan-mac M:A:C/M", "Set VLAN MAC prefix", "set vlan-mac\nconfigure mac prefix", placeholderHandler},
 	}
 
 	for _, cmd := range rootCommands {
@@ -133,7 +140,7 @@ func main() {
 		detailedDesc     string
 		handler          func([]string) string
 	}{
-		{"interface", "ip IPADDR MASK", "Interface Internet Protocol config commands", "configure ip\nset interface ip address", ipHandler},
+		{"interface", "ip A.B.C.D <1-32>", "Interface Internet Protocol config commands", "configure ip\nset interface ip address", ipHandler},
 		{"interface", "description TEXT", "Interface specific description", "set description\nconfigure interface description", descriptionHandler},
 		{"interface", "shutdown", "Shutdown the selected interface", "shutdown interface\ndisable interface", shutdownHandler},
 		{"interface", "no COMMAND", "Negate a command or set its defaults", "negate command\nundo configuration", noHandler},
@@ -209,6 +216,12 @@ func setValueHandler(args []string) string {
 	}
 
 	return fmt.Sprintf("Set %s to %s\r\n", args[0], strings.Join(args[1:], " "))
+}
+
+// placeholderHandler 占位符参数示例 handler：参数值已通过格式校验，
+// 直接原样回显（对应 zebra 的 argv[i]->arg 语义——拿到的是原始字符串）
+func placeholderHandler(args []string) string {
+	return fmt.Sprintf("Configured with value: %s\r\n", strings.Join(args, " "))
 }
 
 func pingHandler(args []string) string {
