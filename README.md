@@ -13,6 +13,7 @@
 - ✅ **并发安全**: 支持多客户端并发访问（`go test -race` 全量验证）
 - ✅ **多行描述**: 支持为命令路径的每个层级提供详细描述
 - ✅ **参数验证**: 支持多种参数类型验证（枚举、范围、字符串、可选参数）
+- ✅ **占位符参数**: 支持 zebra 风格数据类型校验（IPV4/IPV4_PREFIX/IPV6/IPV6_PREFIX/MAC/MAC_PREFIX）
 - ✅ **命令树**: 支持复杂的多级命令结构
 - ✅ **连接数限制**: `MaxConnections` 限制最大并发连接数，超限礼貌拒绝
 - ✅ **空闲回收**: `IdleTimeout` 自动回收空闲超时的会话
@@ -145,6 +146,37 @@ cmdline.RegisterCommand("show running-config", "Show running system information"
 - **范围参数**：如 `<1-10>`
 - **字符串参数**：如 `STRING`
 - **可选参数**：如 `[OPTIONAL]`
+- **占位符参数**：网络设备风格的数据类型（zebra 写法），见下表
+
+#### 占位符参数
+
+注册命令时使用占位符声明参数，命令执行前按类型校验参数值格式，handler 的 `args` 中拿到用户输入的原始字符串（对应 zebra 的 `argv[i]->arg` 语义）。所有占位符均为必填参数。
+
+| 占位符写法 | 类型名称 | 匹配示例 | 说明 |
+|---|---|---|---|
+| `A.B.C.D` | IPV4 | `192.168.1.1` | 点分十进制 IPv4 地址 |
+| `A.B.C.D/M` | IPV4_PREFIX | `10.0.0.0/8` | 含掩码长度的 IPv4 前缀 |
+| `X:X::X:X` | IPV6 | `2001:db8::1` | 标准 IPv6 文本 |
+| `X:X::X:X/M` | IPV6_PREFIX | `2001:db8::/32` | 含前缀长度的 IPv6 前缀 |
+| `M:A:C` | MAC | `aa:bb:cc:dd:ee:ff` | 六段冒号分隔十六进制 |
+| `M:A:C/M` | MAC_PREFIX | `aa:bb:cc:00:00:00/24` | 带掩码长度的 MAC 前缀 |
+
+```go
+cmdline.RegisterCommand("ip route A.B.C.D/M X:X::X:X", "Add IPv4 route via IPv6 nexthop",
+    func(args []string) string {
+        // args[0] = "10.0.0.0/8"，args[1] = "2001:db8::1"（已通过格式校验的原始字符串）
+        return "ok"
+    })
+```
+
+非法输入会被拒绝并给出格式提示，例如：
+
+```text
+Error: Invalid parameter value for command 'neighbor'
+Parameter 1: 无效的 MAC 地址: 'aa:bb:cc'（期望形如 aa:bb:cc:dd:ee:ff）
+```
+
+校验细节：IPv4/IPv6 及前缀基于 `net.ParseIP`/`net.ParseCIDR` 并区分地址族；MAC 要求每段严格两位十六进制（`aabb.ccdd.eeff` 点分与 `a:b:c` 缩写均不接受）；MAC 前缀掩码为十进制 0-48。空输入时 Tab 补全会提示占位符格式（如 `A.B.C.D/M`）。
 
 ### 参数统计逻辑优化
 

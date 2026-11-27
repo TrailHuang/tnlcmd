@@ -378,3 +378,57 @@ func TestModeCommandsIsolation(t *testing.T) {
 		t.Error("tree2 should NOT have mode1")
 	}
 }
+
+// TestAddCommandRejectsInvalidSyntax 验证非法参数语法在注册期返回错误（工单 06）。
+func TestAddCommandRejectsInvalidSyntax(t *testing.T) {
+	for _, command := range []string{
+		"bad <1-",
+		"bad (on",
+		"bad [OPT",
+		"bad <abc>",
+		"bad (|)",
+		"bad value)",
+	} {
+		tree := NewCommandTree()
+		if err := tree.AddCommand(command, "bad", func(args []string) string { return "" }); err == nil {
+			t.Errorf("AddCommand(%q) should return an error", command)
+		}
+	}
+}
+
+// TestSpacedEnumParsing 验证带空格的枚举写法被解析为规范化枚举节点（工单 06）。
+func TestSpacedEnumParsing(t *testing.T) {
+	tree := NewCommandTree()
+	if err := tree.AddCommand("set sw (on | off)", "Set switch", func(args []string) string { return "" }); err != nil {
+		t.Fatalf("AddCommand: %v", err)
+	}
+	node, _, _, err := tree.FindCommand([]string{"set", "sw", "on"})
+	if err != nil || node == nil {
+		t.Fatalf("FindCommand(on) failed: node=%v err=%v", node, err)
+	}
+	if node.Name != "(on|off)" {
+		t.Errorf("enum node name = %q, want %q", node.Name, "(on|off)")
+	}
+	if got := strings.Join(node.EnumValues, ","); got != "on,off" {
+		t.Errorf("EnumValues = %q, want %q", got, "on,off")
+	}
+	if _, _, _, err := tree.FindCommand([]string{"set", "sw", "bad"}); err == nil {
+		t.Error("invalid enum value should not match")
+	}
+}
+
+// TestFindCommandReturnsUnmatchedArgs 验证多余参数随查找结果一并返回，
+// 交由会话层做数量校验（工单 06）。
+func TestFindCommandReturnsUnmatchedArgs(t *testing.T) {
+	tree := NewCommandTree()
+	if err := tree.AddCommand("set value <1-10>", "Set value", func(args []string) string { return "" }); err != nil {
+		t.Fatal(err)
+	}
+	_, _, args, err := tree.FindCommand([]string{"set", "value", "5", "extra"})
+	if err != nil {
+		t.Fatalf("FindCommand: %v", err)
+	}
+	if got := strings.Join(args, ","); got != "5,extra" {
+		t.Errorf("args = %q, want %q", got, "5,extra")
+	}
+}

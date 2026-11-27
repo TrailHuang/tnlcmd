@@ -28,17 +28,18 @@ const readBufSize = 1024
 
 // Session 会话结构
 type Session struct {
-	conn       net.Conn
-	reader     *bufio.Reader
-	writer     *bufio.Writer
-	config     *types.Config
-	mu         sync.RWMutex
-	lastActive time.Time
-	isClosed   bool
-	history    *history.CommandHistory
-	completer  *completer.CommandCompleter
-	context    *mode.CommandContext
-	prompt     string
+	conn        net.Conn
+	reader      *bufio.Reader
+	writer      *bufio.Writer
+	config      *types.Config
+	mu          sync.RWMutex
+	lastActive  time.Time
+	isClosed    bool
+	history     *history.CommandHistory
+	completer   *completer.CommandCompleter
+	context     *mode.CommandContext
+	prompt      string
+	auditLogger *slog.Logger // 审计专用 logger；由服务器在 Handle 前注入，nil 表示不审计
 
 	// readBuf 为 readLine 的读取缓冲，会话创建时分配一次并在整个会话期间复用。
 	// 仅由 Handle→readLine 所在的单一 goroutine 访问，无需额外加锁。
@@ -78,6 +79,23 @@ func NewSessionWithContext(conn net.Conn, config *types.Config, context *mode.Co
 	}
 
 	return s
+}
+
+// SetAuditLogger 注入审计专用 logger。必须在 Handle 启动前调用；
+// nil 表示本会话不输出审计记录。
+func (s *Session) SetAuditLogger(logger *slog.Logger) {
+	s.auditLogger = logger
+}
+
+// audit 通过审计专用通道输出一条记录，不触碰进程全局 logger。
+func (s *Session) audit(kv ...any) {
+	if s.auditLogger == nil {
+		return
+	}
+	args := make([]any, 0, len(kv)+2)
+	args = append(args, "remote", s.remoteStr())
+	args = append(args, kv...)
+	s.auditLogger.Info("audit", args...)
 }
 
 // updateCommands 更新提示符与补全器上下文。
@@ -338,8 +356,7 @@ func (s *Session) authenticate(ctx context.Context) bool {
 			"attempt", attempt,
 			"max_attempts", maxAttempts)
 		if s.config.AuditLog {
-			slog.Info("audit",
-				"remote", s.remoteStr(),
+			s.audit(
 				"event", "auth_failed",
 				"attempt", attempt,
 				"max_attempts", maxAttempts)
@@ -354,8 +371,7 @@ func (s *Session) authenticate(ctx context.Context) bool {
 		"remote", s.remoteStr(),
 		"attempts", maxAttempts)
 	if s.config.AuditLog {
-		slog.Info("audit",
-			"remote", s.remoteStr(),
+		s.audit(
 			"event", "auth_exhausted",
 			"attempts", maxAttempts,
 			"result", "disconnect")
@@ -741,8 +757,7 @@ func (s *Session) auditCommand(command string, elapsed time.Duration, err error)
 	if err != nil {
 		result = err.Error()
 	}
-	slog.Info("audit",
-		"remote", s.remoteStr(),
+	s.audit(
 		"command", command,
 		"duration_ms", elapsed.Milliseconds(),
 		"result", result)
@@ -1006,13 +1021,13 @@ func (s *Session) validateCommandParameters(node *commandtree.CommandNode, match
 	if len(args) < requiredParams {
 		s.writerWrite(fmt.Sprintf("Error: Too few arguments for command '%s'\r\n", strings.Join(matchedPath, " ")))
 		s.writerWrite(fmt.Sprintf("Expected at least %d arguments, got %d\r\n", requiredParams, len(args)))
-		return fmt.Errorf("insufficient arguments")
+		return fmt.Errorf("%w: expected at least %d, got %d", types.ErrTooFewArguments, requiredParams, len(args))
 	}
 
 	if len(args) > requiredParams+optionalParams {
 		s.writerWrite(fmt.Sprintf("Error: Too many arguments for command '%s'\r\n", strings.Join(matchedPath, " ")))
 		s.writerWrite(fmt.Sprintf("Expected at most %d arguments, got %d\r\n", requiredParams+optionalParams, len(args)))
-		return fmt.Errorf("too many arguments")
+		return fmt.Errorf("%w: expected at most %d, got %d", types.ErrTooManyArguments, requiredParams+optionalParams, len(args))
 	}
 
 	// 验证参数值的合法性
@@ -1026,7 +1041,8 @@ func (s *Session) validateCommandParameters(node *commandtree.CommandNode, match
 				errorMsg := s.getParameterValidationError(paramNode, arg)
 				s.writerWrite(fmt.Sprintf("Error: Invalid parameter value for command '%s'\r\n", strings.Join(matchedPath, " ")))
 				s.writerWrite(fmt.Sprintf("Parameter %d: %s\r\n", i+1, errorMsg))
-				return fmt.Errorf("invalid parameter value")
+				return fmt.Errorf("%w: parameter %d (%q) of command %q: %s",
+					types.ErrInvalidParameterValue, i+1, arg, strings.Join(matchedPath, " "), errorMsg)
 			}
 		}
 	}

@@ -192,22 +192,67 @@ func (t *CommandTree) AddModeCommand(modeName string, description string) error 
 	return nil
 }
 
+// splitCommandParts 按空白拆分命令，但把 (), [], <> 内的内容保留为单个 token，
+// 使 (on | off) 这类带空格的枚举写法可以被正确解析；括号不闭合或多出闭合符时返回错误。
+func splitCommandParts(command string) ([]string, error) {
+	var parts []string
+	var cur strings.Builder
+	var open byte
+
+	for i := 0; i < len(command); i++ {
+		ch := command[i]
+		if open != 0 {
+			cur.WriteByte(ch)
+			if ch == open {
+				open = 0
+			}
+			continue
+		}
+		switch ch {
+		case '(':
+			open = ')'
+			cur.WriteByte(ch)
+		case '[':
+			open = ']'
+			cur.WriteByte(ch)
+		case '<':
+			open = '>'
+			cur.WriteByte(ch)
+		case ')', ']', '>':
+			return nil, fmt.Errorf("unmatched closing %q in command %q", ch, command)
+		case ' ', '\t', '\n', '\r':
+			if cur.Len() > 0 {
+				parts = append(parts, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteByte(ch)
+		}
+	}
+	if open != 0 {
+		return nil, fmt.Errorf("unclosed %q in command %q", open, command)
+	}
+	if cur.Len() > 0 {
+		parts = append(parts, cur.String())
+	}
+	return parts, nil
+}
+
 // parseCommandString 解析命令字符串，构建完整的树结构
 func (t *CommandTree) parseCommandString(command string) ([]*CommandNode, error) {
+	parts, err := splitCommandParts(command)
+	if err != nil {
+		return nil, err
+	}
+
 	var nodes []*CommandNode
-
-	// 按空格分割命令
-	parts := strings.Fields(command)
-
 	for _, part := range parts {
 		node, err := t.parseCommandPart(part)
 		if err != nil {
 			return nil, err
 		}
-
 		nodes = append(nodes, node)
 	}
-
 	return nodes, nil
 }
 
@@ -226,12 +271,13 @@ func (t *CommandTree) parseCommandPart(part string) (*CommandNode, error) {
 		{"<", ">", NodeTypeNum, "Range parameter", true, t.parseRangeParam},
 	}
 
-	// 尝试匹配参数类型
+	// 尝试匹配参数类型；形似参数但解析失败时明确报错，不静默降级为普通命令
 	for _, parser := range parsers {
 		if strings.HasPrefix(part, parser.prefix) && strings.HasSuffix(part, parser.suffix) {
 			if node, ok := parser.parser(part); ok {
 				return node, nil
 			}
+			return nil, fmt.Errorf("invalid parameter syntax %q", part)
 		}
 	}
 
@@ -261,11 +307,19 @@ func (t *CommandTree) parseOptionalParam(part string) (*CommandNode, bool) {
 func (t *CommandTree) parseEnumParam(part string) (*CommandNode, bool) {
 	param := strings.Trim(part, "()")
 	values := strings.Split(param, "|")
-	node := NewCommandNode(part, NodeTypeEnum, "Enum parameter")
+	for i, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return nil, false
+		}
+		values[i] = v
+	}
+	// 统一规范化节点名与值列表，避免带空格写法产生畸形树结构或脏候选
+	name := "(" + strings.Join(values, "|") + ")"
+	node := NewCommandNode(name, NodeTypeEnum, "Enum parameter")
 	node.EnumValues = values
 	node.EnumRanges = make([]EnumRange, len(values))
 	for i, v := range values {
-		v = strings.TrimSpace(v)
 		if min, max, ok := parseInlineRange(v); ok {
 			node.EnumRanges[i] = EnumRange{Min: min, Max: max}
 		}
@@ -438,9 +492,12 @@ func (n *CommandNode) findCommand(args []string, path []string, matchArgs []stri
 		if n.Type == NodeTypeOptional {
 			return n, append(path, currentArg), append(matchArgs, currentArg), nil
 		}
-		// 当前节点有处理函数，但还有未匹配的参数
-		// 将这些参数传递给处理函数
-		return n, path, matchArgs, nil
+		// 当前节点有处理函数，但还有未匹配的参数：
+		// 必须一并返回给会话层做数量校验，否则多余参数会被静默丢弃
+		allArgs := make([]string, 0, len(matchArgs)+len(args))
+		allArgs = append(allArgs, matchArgs...)
+		allArgs = append(allArgs, args...)
+		return n, path, allArgs, nil
 	}
 
 	return nil, path, matchArgs, fmt.Errorf("%w: %s", types.ErrUnknownCommand, currentArg)

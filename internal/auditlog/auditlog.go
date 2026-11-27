@@ -1,8 +1,8 @@
 // Package auditlog 提供按日期滚动的审计日志文件写入器。
 //
-// 写入路径规则：AuditLogFile 配置的当天日志直接写入该路径（如 /var/log/tnlcmd/audit.log），
-// 跨天后当天日志切换为新路径（如 audit_20261126.log），历史日志保留为
-// <name>_<YYYYMMDD>.log 形式。过期日志（默认 30 天）由后台 goroutine 自动清理。
+// 写入路径规则：AuditLogFile 配置的当天日志直接写入该路径（如 /var/log/tnlcmd/audit.log）；
+// 跨天时先把旧文件按所属日期归档为 <name>_<YYYYMMDD>.log（如 audit_20261125.log），
+// 当天日志继续写入配置路径。过期历史日志（默认 30 天）由后台 goroutine 自动清理。
 package auditlog
 
 import (
@@ -25,33 +25,43 @@ const retentionDays = 30
 // cleanupInterval 历史日志清理的扫描周期
 const cleanupInterval = 1 * time.Hour
 
-// filePermission 新建日志文件的权限位
-const filePermission = 0o644
+// filePermission 新建日志文件的权限位：审计内容可能包含敏感信息，仅属主可读写
+const filePermission = 0o600
 
 // Writer 按日期滚动的日志写入器，io.Writer + io.Closer 语义。
 // Write 可被多个会话 goroutine 并发调用，内部以互斥锁串行化。
 type Writer struct {
-	mu     sync.Mutex
-	path   string // 用户配置的基础路径，如 /var/log/tnlcmd/audit.log
-	file   *os.File
-	curDay string // 当前打开文件对应的日期（YYYYMMDD），与 path 一致时为空
-	stop   chan struct{}
+	mu      sync.Mutex
+	path    string // 用户配置的基础路径，如 /var/log/tnlcmd/audit.log
+	file    *os.File
+	curDay  string // 当前打开文件对应的日期（YYYYMMDD）
+	stop    chan struct{}
 	stopped sync.WaitGroup
+	now     func() time.Time // 可注入时钟，供跨天滚动与清理测试使用
 }
 
-// NewWriter 创建写入器并打开当天的日志文件。
+// NewWriter 创建写入器并打开当天的日志文件（使用系统时钟）。
 // path 为空时返回 nil（调用方视为未启用文件写入）。
 // 同时启动后台清理 goroutine，按 cleanupInterval 周期删除超过
 // retentionDays 的历史日志；Close 时停止。
 func NewWriter(path string) (*Writer, error) {
+	return NewWriterWithClock(path, time.Now)
+}
+
+// NewWriterWithClock 与 NewWriter 相同，但使用注入的时钟判断日期与保留期。
+func NewWriterWithClock(path string, now func() time.Time) (*Writer, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
+	}
+	if now == nil {
+		now = time.Now
 	}
 	w := &Writer{
 		path: path,
 		stop: make(chan struct{}),
+		now:  now,
 	}
-	if err := w.rotate(time.Now().Format("20060102")); err != nil {
+	if err := w.rotate(now().Format("20060102")); err != nil {
 		return nil, err
 	}
 	w.stopped.Add(1)
@@ -69,7 +79,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 		return 0, fmt.Errorf("auditlog: writer is closed")
 	}
 
-	day := time.Now().Format("20060102")
+	day := w.now().Format("20060102")
 	if day != w.curDay && w.curDay != "" {
 		if err := w.rotateLocked(day); err != nil {
 			return 0, err
@@ -98,20 +108,41 @@ func (w *Writer) Close() error {
 // Wait 等待后台清理 goroutine 退出，供测试与优雅关闭使用。
 func (w *Writer) Wait() { w.stopped.Wait() }
 
-// rotateLocked 打开指定日期的日志文件并关闭旧文件。
-// 调用方必须持有 w.mu。
-// 当天（path 不带日期后缀）保持用户配置的原路径；历史日期追加 _YYYYMMDD 后缀。
+// archiveLocked 将当前活跃文件按它所属日期归档为 <stem>_<YYYYMMDD><ext>，
+// 然后关闭该文件。调用方必须持有 w.mu。
+func (w *Writer) archiveLocked() error {
+	if w.file == nil || w.curDay == "" {
+		return nil
+	}
+	oldPath := w.file.Name()
+	archived := datedPath(w.path, w.curDay)
+	if err := w.file.Close(); err != nil {
+		return fmt.Errorf("auditlog: close %s: %w", oldPath, err)
+	}
+	w.file = nil
+	if err := os.Rename(oldPath, archived); err != nil {
+		return fmt.Errorf("auditlog: archive %s to %s: %w", oldPath, archived, err)
+	}
+	return nil
+}
+
+// rotateLocked 打开指定日期的日志文件；跨天时先把旧文件按旧日期归档，
+// 再以原路径打开当天的新文件。
+// 调用方必须持有 w.mu。当天（path 不带日期后缀）保持用户配置的原路径；
+// 显式打开历史日期时追加 _YYYYMMDD 后缀。
 func (w *Writer) rotateLocked(day string) error {
+	if w.file != nil && w.curDay != "" && w.curDay != day {
+		if err := w.archiveLocked(); err != nil {
+			return err
+		}
+	}
 	target := w.path
-	if day != time.Now().Format("20060102") {
+	if day != w.now().Format("20060102") {
 		target = datedPath(w.path, day)
 	}
 	f, err := os.OpenFile(target, os.O_CREATE|os.O_APPEND|os.O_WRONLY, filePermission)
 	if err != nil {
 		return fmt.Errorf("auditlog: open %s: %w", target, err)
-	}
-	if w.file != nil {
-		_ = w.file.Close()
 	}
 	w.file = f
 	w.curDay = day
@@ -164,6 +195,7 @@ func (w *Writer) cleanupOnce() {
 	w.mu.Lock()
 	dir := filepath.Dir(w.path)
 	active := ""
+	now := w.now()
 	if w.file != nil {
 		active = w.file.Name()
 	}
@@ -179,7 +211,7 @@ func (w *Writer) cleanupOnce() {
 	// 仅匹配与配置文件同名（去掉日期后缀）的滚动日志：
 	// audit.log → audit_20261125.log 命中；audit_20261126.log → audit_20261125.log 命中
 	stem := strings.TrimSuffix(base, filepath.Ext(base))
-	cutoff := time.Now().AddDate(0, 0, -retentionDays).Format("20060102")
+	cutoff := now.AddDate(0, 0, -retentionDays).Format("20060102")
 	for _, e := range entries {
 		if e.IsDir() {
 			continue

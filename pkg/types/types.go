@@ -28,6 +28,12 @@ var (
 	ErrIncompleteCommand = errors.New("incomplete command")
 	// ErrUnknownCommand 未知命令
 	ErrUnknownCommand = errors.New("unknown command")
+	// ErrTooFewArguments 参数数量不足
+	ErrTooFewArguments = errors.New("too few arguments")
+	// ErrTooManyArguments 参数数量过多
+	ErrTooManyArguments = errors.New("too many arguments")
+	// ErrInvalidParameterValue 参数取值非法
+	ErrInvalidParameterValue = errors.New("invalid parameter value")
 )
 
 // 命令处理函数特殊返回值（sentinel values）

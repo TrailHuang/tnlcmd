@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/TrailHuang/tnlcmd/internal/debuglog"
@@ -17,28 +18,40 @@ import (
 
 // TelnetServer telnet服务器
 type TelnetServer struct {
-	config   *types.Config
-	context  *mode.CommandContext
-	listener net.Listener
-	sessions map[net.Conn]*session.Session
-	mu       sync.RWMutex
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup // 跟踪活跃的 session goroutine
-	stopping bool           // Stop 已开始：accept 循环不再登记新 goroutine（防 Add/Wait 竞态）
+	config      *types.Config
+	context     *mode.CommandContext
+	listener    net.Listener
+	sessions    map[net.Conn]*session.Session
+	mu          sync.RWMutex
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup // 跟踪活跃的 session goroutine
+	stopping    bool           // Stop 已开始：accept 循环不再登记新 goroutine（防 Add/Wait 竞态）
+	idleTimeout atomic.Int64   // 空闲回收阈值（纳秒），可被运行期更新，0 = 关闭
+	idleWake    chan struct{}  // 通知回收 goroutine 按新阈值重建 ticker
+	auditLogger *slog.Logger   // 审计专用 logger；由编排层在 Start 前注入，nil = 不审计
+}
+
+// SetAuditLogger 设置审计专用 logger。必须在 Start 之前调用；
+// 之后每个会话在启动前继承该 logger，审计输出不经过进程全局默认 logger。
+func (ts *TelnetServer) SetAuditLogger(logger *slog.Logger) {
+	ts.auditLogger = logger
 }
 
 // NewTelnetServerWithContext 创建带上下文的telnet服务器
 func NewTelnetServerWithContext(config *types.Config, commandctx *mode.CommandContext) *TelnetServer {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &TelnetServer{
+	ts := &TelnetServer{
 		config:   config,
 		context:  commandctx,
 		sessions: make(map[net.Conn]*session.Session),
 		ctx:      ctx,
 		cancel:   cancel,
+		idleWake: make(chan struct{}, 1),
 	}
+	ts.idleTimeout.Store(int64(config.IdleTimeout))
+	return ts
 }
 
 // Start 启动telnet服务器
@@ -53,10 +66,9 @@ func (ts *TelnetServer) Start() error {
 	slog.Debug("listener established, accepting connections", "port", ts.config.Port)
 	go ts.acceptConnections()
 
-	// 启用空闲会话回收（IdleTimeout > 0 时）
-	if ts.config.IdleTimeout > 0 {
-		go ts.reapIdleSessions()
-	}
+	// 空闲回收 goroutine 常驻：阈值可在运行期通过 UpdateIdleTimeout 调整，
+	// 为 0 时等待唤醒而不扫描，ctx 取消时退出
+	go ts.reapIdleSessions()
 
 	return nil
 }
@@ -195,8 +207,9 @@ func (ts *TelnetServer) handleConnection(conn net.Conn) {
 	// 每个连接使用独立的上下文副本，避免会话间共享可变状态
 	context := ts.context.Clone()
 
-	// 创建会话
+	// 创建会话，并注入审计专用 logger（不触碰全局默认 logger）
 	session := session.NewSessionWithContext(conn, ts.config, context)
+	session.SetAuditLogger(ts.auditLogger)
 
 	// 注册会话，并在同一临界区内复查停止态与上限：
 	// 预检与注册之间可能有并发连接占满槽位，复查保证"检查 + 注册"原子性不超发；
@@ -261,42 +274,81 @@ func (ts *TelnetServer) rejectConnection(conn net.Conn) {
 	conn.Close()
 }
 
-// reapIdleSessions 周期性回收空闲超过 IdleTimeout 的会话。
-// 由 Start 在 IdleTimeout > 0 时启动，服务器 ctx 取消时退出。
-func (ts *TelnetServer) reapIdleSessions() {
-	// 扫描间隔取阈值的一半，下限 100ms 保证小阈值场景下回收及时
-	interval := ts.config.IdleTimeout / 2
-	if interval < 100*time.Millisecond {
-		interval = 100 * time.Millisecond
+// UpdateIdleTimeout 在运行期更新空闲回收阈值并唤醒回收 goroutine 重建 ticker。
+// 负数视为关闭回收；唤醒通道容量为 1，重复的连续更新会被合并，不会阻塞调用方。
+func (ts *TelnetServer) UpdateIdleTimeout(timeout time.Duration) {
+	if timeout < 0 {
+		timeout = 0
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	ts.idleTimeout.Store(int64(timeout))
+	select {
+	case ts.idleWake <- struct{}{}:
+	default:
+	}
+}
+
+// reapIdleSessions 周期性回收空闲超过阈值的会话；阈值可被运行期更新。
+// 由 Start 启动，服务器 ctx 取消时退出。
+func (ts *TelnetServer) reapIdleSessions() {
+	var ticker *time.Ticker
+	var tick <-chan time.Time
+
+	// rebuild 按当前阈值重建 ticker；阈值为 0 时停用扫描但保留 goroutine，
+	// 等待后续 UpdateIdleTimeout 唤醒
+	rebuild := func() {
+		if ticker != nil {
+			ticker.Stop()
+			ticker = nil
+			tick = nil
+		}
+		timeout := time.Duration(ts.idleTimeout.Load())
+		if timeout <= 0 {
+			return
+		}
+		interval := timeout / 2
+		if interval < 100*time.Millisecond {
+			interval = 100 * time.Millisecond
+		}
+		ticker = time.NewTicker(interval)
+		tick = ticker.C
+	}
+	rebuild()
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
 
 	for {
 		select {
 		case <-ts.ctx.Done():
 			return
-		case <-ticker.C:
-			ts.closeStaleSessions()
+		case <-ts.idleWake:
+			rebuild()
+		case <-tick:
+			timeout := time.Duration(ts.idleTimeout.Load())
+			if timeout > 0 {
+				ts.closeStaleSessions(timeout)
+			}
 		}
 	}
 }
 
-// closeStaleSessions 关闭所有空闲超时的会话连接。
+// closeStaleSessions 关闭所有空闲超过 threshold 的会话连接。
 // 先在读锁下收集过期会话，再在锁外逐个关闭：Close 会解除会话 readLine 的阻塞，
 // 会话 goroutine 自行完成退出与 map 清理。
-func (ts *TelnetServer) closeStaleSessions() {
+func (ts *TelnetServer) closeStaleSessions(threshold time.Duration) {
 	ts.mu.RLock()
 	var stale []*session.Session
 	for _, s := range ts.sessions {
-		if s.IsStale(ts.config.IdleTimeout) {
+		if s.IsStale(threshold) {
 			stale = append(stale, s)
 		}
 	}
 	ts.mu.RUnlock()
 
 	for _, s := range stale {
-		slog.Info("reaping idle session", "idle_timeout", ts.config.IdleTimeout)
+		slog.Info("reaping idle session", "idle_timeout", threshold)
 		s.Close()
 	}
 }

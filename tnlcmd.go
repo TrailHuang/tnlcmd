@@ -16,6 +16,15 @@ type ContextHandler = types.ContextHandler
 // Config 命令行配置
 type Config = types.Config
 
+// 命令查找与参数校验哨兵错误，调用方使用 errors.Is 判断
+var (
+	ErrIncompleteCommand     = types.ErrIncompleteCommand
+	ErrUnknownCommand        = types.ErrUnknownCommand
+	ErrTooFewArguments       = types.ErrTooFewArguments
+	ErrTooManyArguments      = types.ErrTooManyArguments
+	ErrInvalidParameterValue = types.ErrInvalidParameterValue
+)
+
 // CmdLine 命令行接口
 type CmdLine struct {
 	*cmdline.CmdLine
@@ -68,28 +77,7 @@ func (c *CmdLine) SetConfig(key, value string) error {
 	return c.CmdLine.SetConfig(key, value)
 }
 
-// DefaultConfig 返回默认配置
+// DefaultConfig 返回默认配置（与 NewCmdLine(nil) 共用 internal/cmdline 的单一来源）
 func DefaultConfig() *Config {
-	return &Config{
-		Prompt:     "cmdline",
-		Port:       2323,
-		WelcomeMsg: "Welcome to Command Line Interface!\r\nType '?' for available commands.\r\n",
-		MaxHistory: 100,
-		PageSize:   24,
-
-		// 安全能力默认关闭（0 值）：不限制连接数、不回收空闲会话、不启用密码认证。
-		// 需要时按需设置，例如：
-		//   MaxConnections:  10,
-		//   IdleTimeout:     5 * time.Minute,
-		//   Password:        "secret",
-		//   MaxAuthAttempts: 3, // 0 使用内置默认值 3
-		MaxConnections:  0,
-		IdleTimeout:     0,
-		Password:        "",
-		MaxAuthAttempts: 0,
-
-		// AuditLog 命令审计日志，默认关闭；需要时置 true，
-		// 每条命令执行与认证失败事件将经 slog 输出结构化审计记录。
-		AuditLog: false,
-	}
+	return cmdline.DefaultConfig()
 }

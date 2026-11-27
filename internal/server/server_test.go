@@ -545,6 +545,45 @@ func TestServer_StopDuringAcceptStorm(t *testing.T) {
 	}
 }
 
+// TestServer_UpdateIdleTimeoutRebuildsReaper 验证服务器运行期更新空闲阈值会重建
+// 回收周期：以极长阈值启动的空闲会话在调小阈值后被回收（工单 03）。
+func TestServer_UpdateIdleTimeoutRebuildsReaper(t *testing.T) {
+	rootMode := mode.NewCommandMode("root", "SRV>", "test")
+	config := &types.Config{
+		Prompt:      "SRV>",
+		Port:        0,
+		WelcomeMsg:  "WELCOME_MARKER\r\n",
+		IdleTimeout: time.Hour,
+	}
+	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
+	srv := NewTelnetServerWithContext(config, ctx)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	conn, err := net.Dial("tcp", srv.listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	readWelcomeMarker(t, conn, bufio.NewReader(conn), "WELCOME_MARKER")
+
+	srv.UpdateIdleTimeout(200 * time.Millisecond)
+
+	// 读超时说明阈值更新没有触发回收，不能当作通过
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	tmp := make([]byte, 1)
+	for {
+		if _, err := conn.Read(tmp); err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				t.Error("idle session was not reaped after UpdateIdleTimeout")
+			}
+			return
+		}
+	}
+}
+
 // TestAcceptBackoffDelay 验证 accept 临时错误的退避曲线：10ms 起步逐次翻倍，封顶 200ms。
 func TestAcceptBackoffDelay(t *testing.T) {
 	cases := []struct {

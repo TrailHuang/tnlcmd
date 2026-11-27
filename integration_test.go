@@ -617,6 +617,11 @@ func TestIntegration_Exception_IncompleteCommand(t *testing.T) {
 	it.connect()
 	defer it.disconnect()
 
+	// 排空连接建立时的初始提示符，避免与命令输出混在一次读取里
+	if _, err := it.readUntilPrompt(3 * time.Second); err != nil {
+		t.Fatalf("drain initial prompt failed: %v", err)
+	}
+
 	// 发送不完整命令
 	if err := it.write("show\r\n"); err != nil {
 		t.Fatalf("write failed: %v", err)
@@ -629,7 +634,7 @@ func TestIntegration_Exception_IncompleteCommand(t *testing.T) {
 
 	// 应该提示命令不完整
 	if !strings.Contains(buf, "Incomplete") && !strings.Contains(buf, "%") {
-		t.Logf("incomplete command message: %q", buf)
+		t.Errorf("expected incomplete command message, got %q", buf)
 	}
 }
 
@@ -645,6 +650,11 @@ func TestIntegration_Exception_TooManyArguments(t *testing.T) {
 	it.connect()
 	defer it.disconnect()
 
+	// 排空连接建立时的初始提示符
+	if _, err := it.readUntilPrompt(3 * time.Second); err != nil {
+		t.Fatalf("drain initial prompt failed: %v", err)
+	}
+
 	// 发送参数过多的命令
 	if err := it.write("set value 5 extra_arg\r\n"); err != nil {
 		t.Fatalf("write failed: %v", err)
@@ -656,7 +666,72 @@ func TestIntegration_Exception_TooManyArguments(t *testing.T) {
 	}
 
 	if !strings.Contains(buf, "Too many") {
-		t.Logf("too many args message: %q", buf)
+		t.Errorf("expected too many arguments message, got %q", buf)
+	}
+}
+
+// TestIntegration_CommandParameterValidationMatrix 端到端覆盖合法、参数不足、
+// 参数过多、取值非法四种参数场景，以及带空格枚举写法的正确解析（工单 06）。
+func TestIntegration_CommandParameterValidationMatrix(t *testing.T) {
+	it := newIntegrationTest(t)
+	defer it.cleanup()
+
+	it.rootMode.AddCommand("set level <1-10>", "Set level", func(args []string) string { return "LEVEL_OK\r\n" })
+	it.rootMode.AddCommand("set sw (on | off)", "Set switch", func(args []string) string {
+		return "SW_" + strings.ToUpper(args[0]) + "\r\n"
+	})
+	it.context.CommandTree = it.rootMode.CommandTree
+
+	it.startServer()
+	it.connect()
+	defer it.disconnect()
+
+	// 排空连接建立时的初始提示符，保证后续每次读取对应该命令的输出
+	if _, err := it.readUntilPrompt(3 * time.Second); err != nil {
+		t.Fatalf("drain initial prompt failed: %v", err)
+	}
+
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"set level 5\r\n", "LEVEL_OK"},
+		{"set level\r\n", "Incomplete command"},
+		{"set level 5 extra\r\n", "Too many arguments"},
+		// 取值非法在命令树层被拒绝（会话层的 ErrInvalidParameterValue 由单测覆盖）
+		{"set level 99\r\n", "Unknown command"},
+		{"set sw on\r\n", "SW_ON"},
+		{"set sw off\r\n", "SW_OFF"},
+	}
+	for _, tc := range cases {
+		if err := it.write(tc.input); err != nil {
+			t.Fatalf("write %q failed: %v", tc.input, err)
+		}
+		buf, err := it.readUntilPrompt(3 * time.Second)
+		if err != nil {
+			t.Fatalf("read after %q failed: %v (buf=%q)", tc.input, err, buf)
+		}
+		if !strings.Contains(buf, tc.want) {
+			t.Errorf("input %q: expected %q in output, got %q", tc.input, tc.want, buf)
+		}
+	}
+}
+
+// TestIntegration_RegisterCommandRejectsInvalidSyntax 验证非法参数语法在注册期
+// 就返回错误，不再静默降级为字面命令（工单 06）。
+func TestIntegration_RegisterCommandRejectsInvalidSyntax(t *testing.T) {
+	for _, name := range []string{
+		"bad <1-",
+		"bad (on",
+		"bad [OPT",
+		"bad <abc>",
+		"bad (|)",
+	} {
+		c := tnlcmd.NewCmdLine(nil)
+		err := c.RegisterCommand(name, "bad syntax", func(args []string) string { return "" })
+		if err == nil {
+			t.Errorf("RegisterCommand(%q) should return an error", name)
+		}
 	}
 }
 
@@ -1179,10 +1254,16 @@ func TestIntegration_Performance_MultipleConcurrentConnections(t *testing.T) {
 			// 发送命令
 			conn.Write([]byte("test\r\n"))
 
-			// 读取响应
+			// 读取命令响应即结束，不等待服务端关闭连接（否则每个连接都要等满读超时）
+			var buf strings.Builder
 			for {
-				_, err := reader.ReadByte()
+				b, err := reader.ReadByte()
 				if err != nil {
+					errorCount.Add(1)
+					return
+				}
+				buf.WriteByte(b)
+				if strings.Contains(buf.String(), "PERF_OK") {
 					break
 				}
 			}
@@ -1318,7 +1399,7 @@ func TestIntegration_Security_CommandInjectionPrevention(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"set name hello world", "NAME_SET=hello"},
+		{"set name hello world", "Too many arguments"},
 		{"set name 'test'", "NAME_SET='test'"},
 		{"set name test;rm", "NAME_SET=test;rm"},
 	}

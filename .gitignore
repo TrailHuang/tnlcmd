@@ -1,1 +1,5 @@
 .scratch/*
+bin/*
+docs/*
+AGENTS.md
+CODE_REVIEW.md

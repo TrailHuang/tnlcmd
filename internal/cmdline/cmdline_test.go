@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -214,8 +215,8 @@ func TestSetConfig_AuditLogFileKey(t *testing.T) {
 	}
 }
 
-// TestAuditLogFileInitializedOnStart 验证 Start 后审计日志写入配置的文件而非 stderr，
-// Stop 后 slog 默认 logger 还原（工单：审计日志落盘）。
+// TestAuditLogFileInitializedOnStart 验证审计走专用 logger 写入文件，进程全局
+// 默认 logger 不被改写，业务日志不混入审计文件（工单 05）。
 func TestAuditLogFileInitializedOnStart(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "audit.log")
@@ -224,6 +225,9 @@ func TestAuditLogFileInitializedOnStart(t *testing.T) {
 	c.config.Port = 0
 	c.config.AuditLog = true
 	c.config.AuditLogFile = logPath
+	if err := c.RegisterCommand("auditme", "audit me", func(args []string) string { return "OK\r\n" }); err != nil {
+		t.Fatal(err)
+	}
 
 	prev := slog.Default()
 	defer slog.SetDefault(prev)
@@ -232,32 +236,73 @@ func TestAuditLogFileInitializedOnStart(t *testing.T) {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	// Start 后 slog 默认 logger 已切换为文件写入器：写入一条日志验证落盘
-	if slog.Default() == prev {
-		t.Fatal("slog default logger was not switched to audit file handler after Start")
-	}
-	slog.Info("audit", "event", "test_event", "command", "show version")
-	_ = c.Stop()
-
-	// Stop 后 logger 还原
+	// 全局 logger 必须保持不变
 	if slog.Default() != prev {
-		t.Error("slog default logger was not restored after Stop")
+		t.Fatal("Start must not replace the process global default logger")
+	}
+	c.mu.RLock()
+	logger := c.auditLogger
+	c.mu.RUnlock()
+	if logger == nil {
+		t.Fatal("dedicated audit logger was not initialized")
 	}
 
-	got, err := os.ReadFile(logPath)
+	// 端到端：真实会话执行命令应产生审计记录
+	conn, err := net.Dial("tcp", c.server.Addr())
 	if err != nil {
-		t.Fatalf("audit log file %s not created: %v", logPath, err)
+		t.Fatal(err)
 	}
-	for _, key := range []string{"audit", "event=test_event", `command="show version"`} {
+	defer conn.Close()
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if _, err := fmt.Fprint(conn, "auditme\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	tmp := make([]byte, 1)
+	var out strings.Builder
+	for {
+		if _, err := conn.Read(tmp); err != nil {
+			t.Fatalf("read command output failed: %v (buf=%q)", err, out.String())
+		}
+		out.WriteByte(tmp[0])
+		if strings.Contains(out.String(), "OK") {
+			break
+		}
+	}
+
+	// 业务日志走全局 logger，不应进入审计文件
+	slog.Default().Info("business-log", "marker", "BUSINESS_ONLY")
+
+	_ = c.Stop()
+	if slog.Default() != prev {
+		t.Error("Stop must not change the process global default logger")
+	}
+
+	// 审计写入是同步的，稍作轮询等待文件可见
+	var got []byte
+	for i := 0; i < 50; i++ {
+		got, err = os.ReadFile(logPath)
+		if err != nil {
+			t.Fatalf("audit log file %s not created: %v", logPath, err)
+		}
+		if strings.Contains(string(got), "command=auditme") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for _, key := range []string{"audit", "command=auditme", "duration_ms=", "result=ok"} {
 		if !strings.Contains(string(got), key) {
 			t.Errorf("audit log file missing %q, got: %s", key, got)
 		}
 	}
+	if strings.Contains(string(got), "BUSINESS_ONLY") {
+		t.Error("business log leaked into the audit file")
+	}
 }
 
 // TestStartFailureReclaimsAuditResources 验证启动失败（端口被占用）后审计资源被完整回收：
-// 写入器关闭、后台清理 goroutine 退出、全局 logger 还原，且服务可在端口释放后重新启动
-// 并完成审计初始化（工单 01）。
+// 写入器关闭、后台清理 goroutine 退出、专用 logger 清空，且服务可在端口释放后重新启动
+// 并完成审计初始化（工单 01、05）。
 func TestStartFailureReclaimsAuditResources(t *testing.T) {
 	// 占用一个端口制造 listen 冲突
 	blocker, err := net.Listen("tcp", "127.0.0.1:0")
@@ -281,18 +326,19 @@ func TestStartFailureReclaimsAuditResources(t *testing.T) {
 		t.Fatalf("Start should fail while port %d is occupied", port)
 	}
 
-	// 失败后资源必须已回收
-	c.mu.Lock()
-	leaked := c.auditWriter != nil
-	c.mu.Unlock()
-	if leaked {
-		t.Error("audit writer leaked after failed Start")
+	// 失败后审计资源必须已回收，全局 logger 始终未被改写
+	c.mu.RLock()
+	leakedWriter := c.auditWriter != nil
+	leakedLogger := c.auditLogger != nil
+	c.mu.RUnlock()
+	if leakedWriter || leakedLogger {
+		t.Errorf("audit resources leaked after failed Start: writer=%v logger=%v", leakedWriter, leakedLogger)
 	}
 	if slog.Default() != prev {
-		t.Error("slog default logger must be restored after failed Start")
+		t.Error("global default logger must never be replaced")
 	}
 
-	// 释放端口后同一实例可重新启动，审计文件正常初始化
+	// 释放端口后同一实例可重新启动，审计专用 logger 正常初始化
 	if err := blocker.Close(); err != nil {
 		t.Fatalf("release port failed: %v", err)
 	}
@@ -300,12 +346,15 @@ func TestStartFailureReclaimsAuditResources(t *testing.T) {
 	if err := c.Start(); err != nil {
 		t.Fatalf("Start after failed attempt should succeed: %v", err)
 	}
-	if slog.Default() == prev {
-		t.Error("slog default logger should point to audit file after successful restart")
+	c.mu.RLock()
+	reinitialized := c.auditLogger != nil
+	c.mu.RUnlock()
+	if !reinitialized {
+		t.Error("dedicated audit logger should be reinitialized after successful restart")
 	}
 	_ = c.Stop()
 	if slog.Default() != prev {
-		t.Error("slog default logger must be restored after Stop")
+		t.Error("global default logger must remain unchanged after Stop")
 	}
 }
 
@@ -330,8 +379,87 @@ func TestAuditLogFileNotInitializedWhenDisabled(t *testing.T) {
 	if slog.Default() != prev {
 		t.Error("slog default logger must not change when AuditLog is disabled")
 	}
+	c.mu.RLock()
+	hasLogger := c.auditLogger != nil
+	c.mu.RUnlock()
+	if hasLogger {
+		t.Error("no dedicated audit logger should be created when AuditLog is disabled")
+	}
 	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
 		t.Errorf("audit log file must not be created when AuditLog is disabled (err=%v)", err)
+	}
+}
+
+// TestMultipleCmdLineInstancesAuditIsolation 验证同进程多实例的审计通道互不干扰：
+// 各自的专用 logger 写入各自的文件，全局 logger 始终不变，停止后旧 logger 不再写入（工单 05）。
+func TestMultipleCmdLineInstancesAuditIsolation(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "a.log")
+	path2 := filepath.Join(dir, "b.log")
+
+	prev := slog.Default()
+	defer slog.SetDefault(prev)
+
+	newInstance := func(path string) *CmdLine {
+		c := NewCmdLine(nil)
+		c.config.Port = 0
+		c.config.AuditLog = true
+		c.config.AuditLogFile = path
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	c1 := newInstance(path1)
+	c2 := newInstance(path2)
+	defer func() {
+		_ = c1.Stop()
+		_ = c2.Stop()
+	}()
+
+	c1.mu.RLock()
+	l1 := c1.auditLogger
+	c1.mu.RUnlock()
+	c2.mu.RLock()
+	l2 := c2.auditLogger
+	c2.mu.RUnlock()
+	if l1 == nil || l2 == nil || l1 == l2 {
+		t.Fatalf("each instance must have its own audit logger (l1=%v l2=%v)", l1, l2)
+	}
+
+	l1.Info("audit", "event", "INSTANCE_ONE")
+	l2.Info("audit", "event", "INSTANCE_TWO")
+	if slog.Default() != prev {
+		t.Error("global default logger must remain unchanged with multiple instances")
+	}
+
+	for path, own := range map[string]string{path1: "INSTANCE_ONE", path2: "INSTANCE_TWO"} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s failed: %v", path, err)
+		}
+		if !strings.Contains(string(got), own) {
+			t.Errorf("%s missing own audit marker %q: %s", path, own, got)
+		}
+		foreign := map[string]string{path1: "INSTANCE_TWO", path2: "INSTANCE_ONE"}[path]
+		if strings.Contains(string(got), foreign) {
+			t.Errorf("%s contains other instance's marker %q: %s", path, foreign, got)
+		}
+	}
+
+	// 停止后持有旧 logger 的引用也不应继续写入文件
+	before, err := os.Stat(path1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c1.Stop()
+	l1.Info("audit", "event", "AFTER_STOP")
+	after, err := os.Stat(path1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() != before.Size() {
+		t.Errorf("audit file changed after Stop: %d -> %d bytes", before.Size(), after.Size())
 	}
 }
 
@@ -461,6 +589,166 @@ func TestSetConfigAfterStartSnapshotSemantics(t *testing.T) {
 		}
 		if strings.Contains(out.String(), "--More--") {
 			t.Errorf("conn %d: live session must not see pagination after SetConfig(pagesize=1), got %q", j, out.String())
+		}
+	}
+}
+
+// TestDefaultConfigSingleSource 验证 NewCmdLine(nil) 与导出的默认配置一致（工单 03）。
+func TestDefaultConfigSingleSource(t *testing.T) {
+	want := DefaultConfig()
+	got := NewCmdLine(nil).config
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("NewCmdLine(nil) config = %+v, want %+v", got, want)
+	}
+	// 提示符由模式层规范化，两个默认值的实际提示符必须一致
+	if prompt := NewCmdLine(nil).rootMode.Prompt; prompt != "cmdline> " {
+		t.Errorf("default root prompt = %q, want %q", prompt, "cmdline> ")
+	}
+}
+
+// TestStartRejectsInvalidConfig 验证直接构造的非法配置在 Start 前被拒绝（工单 03）。
+func TestStartRejectsInvalidConfig(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{"negative port", func(c *Config) { c.Port = -1 }},
+		{"port out of range", func(c *Config) { c.Port = 70000 }},
+		{"negative pagesize", func(c *Config) { c.PageSize = -1 }},
+		{"negative maxconnections", func(c *Config) { c.MaxConnections = -1 }},
+		{"negative idletimeout", func(c *Config) { c.IdleTimeout = -time.Second }},
+		{"negative maxauthattempts", func(c *Config) { c.MaxAuthAttempts = -1 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCmdLine(nil)
+			tc.mutate(c.config)
+			err := c.Start()
+			if err == nil {
+				_ = c.Stop()
+				t.Fatal("Start should reject invalid config")
+			}
+			if !strings.Contains(err.Error(), "invalid config") {
+				t.Errorf("error = %q, want an invalid config message", err)
+			}
+			if c.isRunning {
+				t.Error("isRunning must stay false after rejected Start")
+			}
+		})
+	}
+}
+
+// TestSetConfigAllKeys 覆盖每个配置键的合法与非法输入（工单 03）。
+func TestSetConfigAllKeys(t *testing.T) {
+	cases := []struct {
+		key, value string
+		wantErr    bool
+		check      func(*Config) bool
+	}{
+		{"prompt", "TEST>", false, func(c *Config) bool { return c.Prompt == "TEST>" }},
+		{"welcome", "W\r\n", false, func(c *Config) bool { return c.WelcomeMsg == "W\r\n" }},
+		{"maxhistory", "50", false, func(c *Config) bool { return c.MaxHistory == 50 }},
+		{"maxhistory", "abc", true, nil},
+		{"port", "2324", false, func(c *Config) bool { return c.Port == 2324 }},
+		{"port", "0", false, func(c *Config) bool { return c.Port == 0 }},
+		{"port", "-1", true, nil},
+		{"port", "70000", true, nil},
+		{"port", "abc", true, nil},
+		{"pagesize", "0", false, func(c *Config) bool { return c.PageSize == 0 }},
+		{"pagesize", "-1", true, nil},
+		{"pagesize", "abc", true, nil},
+		{"maxconnections", "10", false, func(c *Config) bool { return c.MaxConnections == 10 }},
+		{"maxconnections", "-1", true, nil},
+		{"maxconnections", "abc", true, nil},
+		{"idletimeout", "5m", false, func(c *Config) bool { return c.IdleTimeout == 5*time.Minute }},
+		{"idletimeout", "5", true, nil},
+		{"idletimeout", "-1s", true, nil},
+		{"password", "secret", false, func(c *Config) bool { return c.Password == "secret" }},
+		{"maxauthattempts", "3", false, func(c *Config) bool { return c.MaxAuthAttempts == 3 }},
+		{"maxauthattempts", "-1", true, nil},
+		{"maxauthattempts", "abc", true, nil},
+		{"auditlog", "true", false, func(c *Config) bool { return c.AuditLog }},
+		{"auditlog", "yes", true, nil},
+		{"auditlogfile", "/tmp/audit.log", false, func(c *Config) bool { return c.AuditLogFile == "/tmp/audit.log" }},
+		{"unknown", "x", true, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
+			c := NewCmdLine(nil)
+			err := c.SetConfig(tc.key, tc.value)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("SetConfig(%q, %q) error = %v, wantErr = %v", tc.key, tc.value, err, tc.wantErr)
+			}
+			if !tc.wantErr && tc.check != nil && !tc.check(c.config) {
+				t.Errorf("SetConfig(%q, %q) did not apply value: %+v", tc.key, tc.value, c.config)
+			}
+		})
+	}
+}
+
+// TestSetConfigStartOnlyKeysRejectedWhileRunning 验证启动期专属配置（端口、
+// 审计开关与文件路径）在运行期修改时明确报错，而普通键仍可改模板（工单 03）。
+func TestSetConfigStartOnlyKeysRejectedWhileRunning(t *testing.T) {
+	c := NewCmdLine(nil)
+	c.config.Port = 0
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Stop() }()
+
+	for _, key := range []string{"port", "auditlogfile", "auditlog"} {
+		if err := c.SetConfig(key, "2324"); err == nil {
+			t.Errorf("SetConfig(%q) while running should be rejected", key)
+		}
+	}
+	if err := c.SetConfig("welcome", "Running\r\n"); err != nil {
+		t.Errorf("SetConfig(welcome) while running should succeed: %v", err)
+	}
+}
+
+// TestSetConfigIdleTimeoutHotUpdate 验证 idletimeout 在运行期修改会重建回收周期：
+// 以极长阈值启动的会话在调小阈值后应被回收（工单 03）。
+func TestSetConfigIdleTimeoutHotUpdate(t *testing.T) {
+	c := NewCmdLine(nil)
+	c.config.Port = 0
+	c.config.IdleTimeout = time.Hour
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Stop() }()
+
+	conn, err := net.Dial("tcp", c.server.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// 读到欢迎消息，确认会话已建立
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	tmp := make([]byte, 1)
+	var seen strings.Builder
+	for {
+		if _, err := conn.Read(tmp); err != nil {
+			t.Fatalf("read welcome failed: %v (buf=%q)", err, seen.String())
+		}
+		seen.WriteByte(tmp[0])
+		if strings.Contains(seen.String(), "Welcome to Command Line Interface") {
+			break
+		}
+	}
+
+	if err := c.SetConfig("idletimeout", "200ms"); err != nil {
+		t.Fatalf("SetConfig(idletimeout) while running failed: %v", err)
+	}
+
+	// 空闲会话应在新阈值下被回收（读到 EOF）；读超时说明热更新未生效
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	for {
+		if _, err := conn.Read(tmp); err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				t.Error("idle session was not reaped after runtime idletimeout update")
+			}
+			return
 		}
 	}
 }

@@ -44,6 +44,13 @@ func newPipeTestWithHistory(t *testing.T, pageSize, maxHistory int, rootMode *mo
 // （回调在会话创建前执行），供审计等开关类测试使用。
 func newPipeTestWithConfig(t *testing.T, pageSize, maxHistory int, rootMode *mode.CommandMode, customize func(*types.Config)) *pipeTest {
 	t.Helper()
+	return newPipeTestWithLogger(t, pageSize, maxHistory, rootMode, customize, nil)
+}
+
+// newPipeTestWithLogger 与 newPipeTestWithConfig 相同，但在 Handle 启动前
+// 注入审计专用 logger，避免测试改写进程全局默认 logger。
+func newPipeTestWithLogger(t *testing.T, pageSize, maxHistory int, rootMode *mode.CommandMode, customize func(*types.Config), auditLogger *slog.Logger) *pipeTest {
+	t.Helper()
 	clientConn, serverConn := net.Pipe()
 
 	config := &types.Config{
@@ -58,6 +65,7 @@ func newPipeTestWithConfig(t *testing.T, pageSize, maxHistory int, rootMode *mod
 	}
 	ctx := &mode.CommandContext{CurrentMode: rootMode, Path: []string{}}
 	sess := NewSessionWithContext(serverConn, config, ctx)
+	sess.SetAuditLogger(auditLogger)
 
 	pt := &pipeTest{
 		t:      t,
@@ -131,15 +139,13 @@ func TestSession_AuditLogOnOff(t *testing.T) {
 		{name: "off", auditOn: false, wantAudit: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// 重定向 slog 默认 logger 捕获审计输出
+			// 通过审计专用 logger 捕获输出，不改写全局默认 logger
 			var logBuf safeLogBuffer
-			prev := slog.Default()
-			slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
-			defer slog.SetDefault(prev)
+			testLogger := slog.New(slog.NewTextHandler(&logBuf, nil))
 
-			pt := newPipeTestWithConfig(t, 0, 10, rootMode, func(cfg *types.Config) {
+			pt := newPipeTestWithLogger(t, 0, 10, rootMode, func(cfg *types.Config) {
 				cfg.AuditLog = tc.auditOn
-			})
+			}, testLogger)
 
 			if err := pt.write("echo\r\n"); err != nil {
 				t.Fatalf("write echo failed: %v", err)
@@ -173,14 +179,12 @@ func TestSession_AuditLogOnOff(t *testing.T) {
 // 参数不匹配直接返回 ErrUnknownCommand 且最终输出后返回 nil），故此处白盒直测。
 func TestSession_AuditLogOnCommandError(t *testing.T) {
 	var logBuf safeLogBuffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
-	defer slog.SetDefault(prev)
+	testLogger := slog.New(slog.NewTextHandler(&logBuf, nil))
 
 	rootMode := mode.NewCommandMode("root", "PROMPT_END>", "test")
-	pt := newPipeTestWithConfig(t, 0, 10, rootMode, func(cfg *types.Config) {
+	pt := newPipeTestWithLogger(t, 0, 10, rootMode, func(cfg *types.Config) {
 		cfg.AuditLog = true
-	})
+	}, testLogger)
 	defer pt.close()
 
 	s := pt.sess
@@ -1162,5 +1166,46 @@ func TestSession_CursorWithIACMixedInput(t *testing.T) {
 	}
 	if _, err := pt.readUntil("SAID=heXl", 3*time.Second); err != nil {
 		t.Fatalf("IAC mixed with cursor editing broke input: %v", err)
+	}
+}
+
+// TestValidateCommandParametersSentinels 验证参数校验错误可被 errors.Is 区分（工单 06）。
+func TestValidateCommandParametersSentinels(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	// 会话的错误提示写入 server 端，必须从 client 端排空 net.Pipe
+	go func() {
+		buf := make([]byte, 128)
+		for {
+			if _, err := client.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	rootMode := mode.NewCommandMode("root", "P>", "test")
+	rootMode.AddCommand("set value <1-10>", "Set value", func(args []string) string { return "" })
+	s := NewSessionWithContext(server, &types.Config{Prompt: "P>", MaxHistory: 10},
+		&mode.CommandContext{CurrentMode: rootMode, Path: []string{}})
+
+	// 用合法取值定位到叶子参数节点，再直接驱动校验逻辑覆盖三类错误
+	node, _, _, err := rootMode.CommandTree.FindCommand([]string{"set", "value", "5"})
+	if err != nil {
+		t.Fatalf("FindCommand: %v", err)
+	}
+	for _, tc := range []struct {
+		args []string
+		want error
+	}{
+		{nil, types.ErrTooFewArguments},
+		{[]string{"5", "extra"}, types.ErrTooManyArguments},
+		{[]string{"99"}, types.ErrInvalidParameterValue},
+	} {
+		err := s.validateCommandParameters(node, []string{"set", "value"}, tc.args)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("args=%v: error = %v, want errors.Is(_, %v)", tc.args, err, tc.want)
+		}
 	}
 }

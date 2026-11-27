@@ -2,6 +2,7 @@ package cmdline
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -36,22 +37,59 @@ type CmdLine struct {
 	rootMode    *mode.CommandMode
 	context     *mode.CommandContext
 
-	// auditWriter 审计日志文件写入器（AuditLogFile 非空且 Start 成功时非 nil），
-	// prevLogger 记录 Start 前的 slog 默认 logger，Stop 时还原并关闭文件。
+	// auditWriter 审计日志文件写入器（AuditLogFile 非空且 Start 成功时非 nil）；
+	// auditLogger 是审计专用 logger，不替换进程全局默认 logger。
 	auditWriter *auditlog.Writer
-	prevLogger  *slog.Logger
+	auditLogger *slog.Logger
+}
+
+// DefaultConfig 返回默认配置（单一来源：公共 facade 与 NewCmdLine(nil) 共用）。
+// 提示符由模式层规范化为 "cmdline> "，此处保留未规范化的基础值。
+func DefaultConfig() *Config {
+	return &Config{
+		Prompt:     "cmdline",
+		Port:       2323,
+		WelcomeMsg: "Welcome to Command Line Interface!\r\nType '?' for available commands.\r\n",
+		MaxHistory: 100,
+		PageSize:   24,
+
+		// 安全与审计能力默认关闭（零值）
+		MaxConnections:  0,
+		IdleTimeout:     0,
+		Password:        "",
+		MaxAuthAttempts: 0,
+		AuditLog:        false,
+	}
+}
+
+// validateConfig 在 Start 前校验直接构造的配置（不经过 SetConfig 的路径）。
+// MaxHistory <= 0 表示禁用历史，属于合法值。
+func validateConfig(cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if cfg.Port < 0 || cfg.Port > 65535 {
+		return fmt.Errorf("port must be between 0 and 65535 (0 = ephemeral), got %d", cfg.Port)
+	}
+	if cfg.PageSize < 0 {
+		return fmt.Errorf("pagesize must be non-negative, got %d", cfg.PageSize)
+	}
+	if cfg.MaxConnections < 0 {
+		return fmt.Errorf("maxconnections must be non-negative, got %d", cfg.MaxConnections)
+	}
+	if cfg.MaxAuthAttempts < 0 {
+		return fmt.Errorf("maxauthattempts must be non-negative, got %d", cfg.MaxAuthAttempts)
+	}
+	if cfg.IdleTimeout < 0 {
+		return fmt.Errorf("idletimeout must be non-negative, got %s", cfg.IdleTimeout)
+	}
+	return nil
 }
 
 // NewCmdLine 创建新的命令行接口
 func NewCmdLine(config *Config) *CmdLine {
 	if config == nil {
-		config = &Config{
-			Prompt:     "cmdline> ",
-			Port:       2323,
-			WelcomeMsg: "Welcome to Command Line Interface!\r\nType '?' for available commands.\r\n",
-			MaxHistory: 100,
-			PageSize:   24,
-		}
+		config = DefaultConfig()
 	}
 
 	// 创建根模式
@@ -88,10 +126,9 @@ func (c *CmdLine) RegisterCommand(name, description string, handler CommandHandl
 	// 向后兼容：添加到平面命令存储（包含多行详细描述）
 	c.rootMode.AddCommand(name, description, handler, detailedDescription...)
 
-	// 新功能：添加到命令树
-	err := c.commandTree.AddCommand(name, description, handler, detailedDescription...)
-	if err != nil {
-		slog.Warn("failed to add command to tree", "error", err)
+	// 添加到会话命令树：非法参数语法必须向调用方返回错误
+	if err := c.commandTree.AddCommand(name, description, handler, detailedDescription...); err != nil {
+		return fmt.Errorf("register command %q: %w", name, err)
 	}
 	return nil
 }
@@ -110,10 +147,10 @@ func (c *CmdLine) RegisterContextCommand(name, description string, handler types
 
 	// 添加到根模式命令树与会话命令树（与 RegisterCommand 的双树注册保持一致）
 	if err := c.rootMode.CommandTree.AddContextCommand(name, description, handler, detailedDescription...); err != nil {
-		slog.Warn("failed to add context command to root mode tree", "error", err)
+		return fmt.Errorf("register context command %q: %w", name, err)
 	}
 	if err := c.commandTree.AddContextCommand(name, description, handler, detailedDescription...); err != nil {
-		slog.Warn("failed to add context command to tree", "error", err)
+		return fmt.Errorf("register context command %q: %w", name, err)
 	}
 	return nil
 }
@@ -176,12 +213,21 @@ func (c *CmdLine) CreateMode(modePath string, description string) error {
 }
 
 // SetConfig 动态设置配置参数。
-// 运行期语义（工单 02）：修改只作用于模板配置，在下次 Start 时生效；
-// 已运行的服务与会话持有启动时的配置快照，不受本次修改影响。
-// 这保证并发 SetConfig 与活动会话读配置之间不存在数据竞争。
+// 运行期语义（工单 02/03）：已运行的服务与会话持有启动时的配置快照；除
+// idletimeout 会热更新空闲回收周期外，其余修改只作用于模板、下次 Start 生效，
+// 因此并发 SetConfig 与活动会话读配置之间不存在数据竞争。
+// port/auditlogfile/auditlog 仅在 Start 时生效，运行中修改会返回明确错误。
 func (c *CmdLine) SetConfig(key, value string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// 启动期专属配置在运行中修改会静默无效，明确拒绝以免误导使用方
+	if c.isRunning {
+		switch key {
+		case "port", "auditlogfile", "auditlog":
+			return fmt.Errorf("config key %q can only be changed before Start", key)
+		}
+	}
 
 	switch key {
 	case "prompt":
@@ -197,8 +243,8 @@ func (c *CmdLine) SetConfig(key, value string) error {
 		c.config.MaxHistory = v
 	case "port":
 		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid port value %q: %w", value, err)
+		if err != nil || v < 0 || v > 65535 {
+			return fmt.Errorf("invalid port value %q: must be between 0 and 65535 (0 = ephemeral)", value)
 		}
 		c.config.Port = v
 	case "pagesize":
@@ -220,6 +266,10 @@ func (c *CmdLine) SetConfig(key, value string) error {
 			return fmt.Errorf("invalid idletimeout value %q: must be a non-negative duration like \"5m\" or \"30s\"", value)
 		}
 		c.config.IdleTimeout = v
+		// 空闲回收是唯一热更新的配置项：即使服务已启动，也重建回收 ticker
+		if c.isRunning && c.server != nil {
+			c.server.UpdateIdleTimeout(v)
+		}
 	case "password":
 		// 任意字符串；置空表示关闭认证
 		c.config.Password = value
@@ -255,6 +305,12 @@ func (c *CmdLine) Start() error {
 		return fmt.Errorf("cmdline is already running")
 	}
 
+	// 直接构造的配置也要校验，非法值在 Start 前就返回明确错误
+	if err := validateConfig(c.config); err != nil {
+		c.mu.Unlock()
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
 	// 持锁对配置取快照：Config 全部为值/字符串字段，浅拷贝即完整副本。
 	// server 与 Session 在整个生命周期内只读这份快照，运行期 SetConfig
 	// 只修改模板配置（c.config），从而消除并发读写同一 *Config 的数据竞争（工单 02）。
@@ -267,8 +323,8 @@ func (c *CmdLine) Start() error {
 	// 注册内置命令（在锁外执行，避免死锁）
 	c.registerBuiltinCommands()
 
-	// 审计日志文件初始化：AuditLog 开启且 AuditLogFile 非空时，
-	// 将 slog 默认 logger 切换为写入按日期滚动的文件（失败则保持 stderr 并告警）
+	// 审计初始化：AuditLog 开启时构建专用 logger（文件审计写入按日期滚动的文件，
+	// 否则写 stderr），绝不替换进程全局默认 logger
 	if err := c.setupAuditLogFile(&snapshot); err != nil {
 		slog.Warn("failed to initialize audit log file, falling back to stderr", "error", err)
 	}
@@ -278,15 +334,19 @@ func (c *CmdLine) Start() error {
 		slog.Debug("command tree", "structure", "\n"+c.commandTree.PrintTree())
 	}
 
-	// 创建telnet服务器（传入配置快照）
+	// 创建telnet服务器（传入配置快照），注入审计专用 logger
 	c.server = server.NewTelnetServerWithContext(&snapshot, c.context)
+	c.mu.RLock()
+	auditLogger := c.auditLogger
+	c.mu.RUnlock()
+	c.server.SetAuditLogger(auditLogger)
 
 	// 启动服务器
 	err := c.server.Start()
 	if err != nil {
-		// 启动失败必须回收审计资源（文件句柄、后台清理 goroutine、全局 logger）：
+		// 启动失败必须回收审计资源（文件句柄与后台清理 goroutine）：
 		// 此时 isRunning 即将复位，Stop 会因"未运行"直接返回而不做清理，
-		// 不回收将导致句柄与 goroutine 泄漏，且再次 Start 会覆盖 prevLogger
+		// 不回收将导致句柄与 goroutine 泄漏
 		c.teardownAuditLogFile()
 		c.mu.Lock()
 		c.isRunning = false
@@ -298,67 +358,62 @@ func (c *CmdLine) Start() error {
 	return nil
 }
 
-// setupAuditLogFile 在 Start 时初始化审计日志文件写入器：
-// 创建目录、打开当天文件、启动后台清理 goroutine，并将 slog 默认 logger
-// 切换为文件 TextHandler。AuditLog 关闭或 AuditLogFile 为空时不做任何事。
-// 配置来自 Start 时的快照，与模板配置解耦。
+// setupAuditLogFile 在 Start 时构建审计专用 logger：
+// AuditLogFile 非空时创建目录、打开按日期滚动的文件并启动后台清理 goroutine；
+// 未设置文件时审计输出到 stderr。无论哪种情况都不替换进程全局默认 logger。
 func (c *CmdLine) setupAuditLogFile(cfg *Config) error {
-	if !cfg.AuditLog || cfg.AuditLogFile == "" {
+	if !cfg.AuditLog {
 		return nil
 	}
 
-	if dir := filepath.Dir(cfg.AuditLogFile); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create audit log dir %s: %w", dir, err)
+	var aw *auditlog.Writer
+	var w io.Writer = os.Stderr
+	if cfg.AuditLogFile != "" {
+		if dir := filepath.Dir(cfg.AuditLogFile); dir != "" && dir != "." {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return fmt.Errorf("create audit log dir %s: %w", dir, err)
+			}
 		}
+		var err error
+		aw, err = auditlog.NewWriter(cfg.AuditLogFile)
+		if err != nil {
+			return err
+		}
+		if aw == nil {
+			return nil
+		}
+		w = aw
 	}
 
-	w, err := auditlog.NewWriter(cfg.AuditLogFile)
-	if err != nil {
-		return err
-	}
-	if w == nil {
-		return nil
-	}
+	logger := slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	// 字段写入与 teardownAuditLogFile 的读取共用 c.mu，避免 Start/Stop 并发时
-	// 互相覆盖 auditWriter/prevLogger 导致旧 writer 无法关闭
+	// 与 teardownAuditLogFile 共用 c.mu，避免 Start/Stop 并发时互相覆盖
 	c.mu.Lock()
 	if c.auditWriter != nil {
-		// 已有写入器在运行（并发 Stop 尚未回收）——不覆盖，保持可回收性
 		c.mu.Unlock()
+		if aw != nil {
+			_ = aw.Close()
+			aw.Wait()
+		}
 		return nil
 	}
-	c.auditWriter = w
-	c.prevLogger = slog.Default()
+	c.auditWriter = aw
+	c.auditLogger = logger
 	c.mu.Unlock()
-
-	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
-			// 时间戳已在 slog TextHandler 默认字段中；保持原样输出
-			return a
-		},
-	})))
-	slog.Info("audit log file enabled", "file", cfg.AuditLogFile)
 	return nil
 }
 
-// teardownAuditLogFile 在 Stop 时还原 slog 默认 logger 并关闭审计文件，
-// 等待后台清理 goroutine 退出。未启用文件审计时为空操作。
+// teardownAuditLogFile 在 Stop 时关闭审计专用通道：清空 logger 引用，
+// 关闭审计文件并等待后台清理 goroutine 退出。不触碰进程全局默认 logger。
 func (c *CmdLine) teardownAuditLogFile() {
 	c.mu.Lock()
 	w := c.auditWriter
-	prev := c.prevLogger
 	c.auditWriter = nil
-	c.prevLogger = nil
+	c.auditLogger = nil
 	c.mu.Unlock()
 
 	if w == nil {
 		return
-	}
-	if prev != nil {
-		slog.SetDefault(prev)
 	}
 	_ = w.Close()
 	w.Wait() // 等待清理 goroutine 退出后再关闭文件，避免竞争
