@@ -266,19 +266,6 @@ func TestAddModeCommand(t *testing.T) {
 	if _, exists := tree.ModeCommands["configure"]; !exists {
 		t.Error("configure should be in ModeCommands")
 	}
-
-	// GetModeCommandKeys should return it
-	keys := tree.GetModeCommandKeys()
-	found := false
-	for _, k := range keys {
-		if k == "configure" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("GetModeCommandKeys should include 'configure', got %v", keys)
-	}
 }
 
 func TestPrintTree(t *testing.T) {

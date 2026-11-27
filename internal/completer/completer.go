@@ -373,9 +373,19 @@ func (c *CommandCompleter) GetCommandTreeSuggestions(input string) []string {
 	}
 
 	// 根层级附加视图切换命令并去重；仅在导航仍在根节点时追加，
-	// 已下钻进某条命令（如 "clear "）的参数层不应混入视图切换命令
-	if node == tree.Root {
-		modeKeys := tree.GetModeCommandKeys()
+	// 已下钻进某条命令（如 "clear "）的参数层不应混入视图切换命令。
+	// 数据来源与 Tab 补全、processCommand 跨模式回退保持同源：
+	// 取根模式的 Children 而非当前树自身的 ModeCommands（子模式的树
+	// 从未注册 ModeCommands，此前导致子模式下 ? 丢失视图切换命令），
+	// 并排除当前所在视图。
+	if node == tree.Root && c.context != nil && c.context.CurrentMode != nil {
+		rootMode := c.context.GetRootMode()
+		modeKeys := make([]string, 0, len(rootMode.Children))
+		for name := range rootMode.Children {
+			if name != c.context.CurrentMode.Name {
+				modeKeys = append(modeKeys, name)
+			}
+		}
 		sort.Strings(modeKeys)
 		for _, key := range modeKeys {
 			if seen[key] {

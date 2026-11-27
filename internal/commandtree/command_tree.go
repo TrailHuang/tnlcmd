@@ -89,15 +89,6 @@ func NewCommandNode(name string, nodeType CommandNodeType, description string) *
 	}
 }
 
-// GetModeCommandKeys 获取ModeCommands中的所有key，按数组返回
-func (t *CommandTree) GetModeCommandKeys() []string {
-	keys := make([]string, 0, len(t.ModeCommands))
-	for key := range t.ModeCommands {
-		keys = append(keys, key)
-	}
-	return keys
-}
-
 // AddCommand 添加命令到命令树（旧签名 handler，经 Adapt 包装为 ContextHandler 存储）
 func (t *CommandTree) AddCommand(command string, description string, handler types.CommandHandler, detailedDescription ...string) error {
 	return t.addCommand(command, description, types.Adapt(handler), detailedDescription...)

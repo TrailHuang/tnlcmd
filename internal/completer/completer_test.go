@@ -190,6 +190,49 @@ func TestGetNextLevelCompletions_ModeSwitch(t *testing.T) {
 	}
 }
 
+// TestGetCommandTreeSuggestions_SubModeShowsModeSwitch 验证子模式下的 ? 帮助
+// 必须包含可切换的其他视图命令（工单：interface 视图 ? 丢失 configure）。
+// 行为基准：processCommand 的跨模式回退与 Tab 补全均从根模式取视图切换命令，
+// ? 帮助必须与二者一致；根模式下不应显示当前所在视图自身。
+func TestGetCommandTreeSuggestions_SubModeShowsModeSwitch(t *testing.T) {
+	c := setupCompleterWithModes()
+	// 切换到 interface 子模式
+	ctx := c.context
+	ctx.ChangeMode(ctx.CurrentMode.Children["interface"])
+
+	// 空输入 ?：interface 视图必须能看到切换到 configure 视图的命令
+	suggestions := c.GetCommandTreeSuggestions("")
+	if len(suggestions) == 0 {
+		t.Fatal("GetCommandTreeSuggestions('') in interface mode should return suggestions")
+	}
+	foundConfigure := false
+	for _, line := range suggestions {
+		if strings.Fields(line)[0] == "configure" {
+			foundConfigure = true
+		}
+		// 当前视图自身不应出现在候选中（已在 interface 内，无需再切换）
+		if strings.Fields(line)[0] == "interface" {
+			t.Errorf("? suggestions in interface mode should not contain 'interface' itself, got %v", suggestions)
+		}
+	}
+	if !foundConfigure {
+		t.Errorf("? suggestions in interface mode should contain 'configure' to switch modes, got %v", suggestions)
+	}
+
+	// 回到根模式：不应显示当前所在根视图的同名切换命令（根模式无同名子模式，无影响）
+	ctx.ChangeMode(ctx.CurrentMode.Children["configure"])
+	suggestions = c.GetCommandTreeSuggestions("")
+	foundConfigure = false
+	for _, line := range suggestions {
+		if strings.Fields(line)[0] == "configure" {
+			foundConfigure = true
+		}
+	}
+	if foundConfigure {
+		t.Errorf("? suggestions in configure mode should not contain 'configure' itself, got %v", suggestions)
+	}
+}
+
 // TestProductionPathContracts 守护三条生产入口（session 层消费）的输出契约：
 //   - GetNextLevelCompletions（Tab 命令补全）：返回裸命令名——session 在唯一匹配时
 //     直接将其回填输入行，绝不能混入描述文本；
